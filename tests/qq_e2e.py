@@ -176,6 +176,32 @@ async def main() -> None:
         assert poke["params"] == {"user_id": 12345, "group_id": 555}, poke
         print("ok 戳一戳")
 
+        # 10) 收到戳一戳：随机回一句，且不产生会话事件
+        before = len([r for r in server.received if r.get("action") == "send_group_msg"])
+        await server.send_event(
+            {
+                "post_type": "notice",
+                "notice_type": "notify",
+                "sub_type": "poke",
+                "time": 1762330000,
+                "user_id": 12345,
+                "target_id": 99999,
+                "group_id": 555,
+            }
+        )
+        replies: list[dict] = []
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            replies = [r for r in server.received if r.get("action") == "send_group_msg"]
+            if len(replies) > before:
+                break
+        assert len(replies) > before, "戳一戳没有回应"
+        segs = replies[-1]["params"]["message"]
+        assert segs[0] == {"type": "at", "data": {"qq": "12345"}}, segs
+        assert segs[-1]["type"] == "text" and segs[-1]["data"]["text"], segs
+        assert events.empty(), "戳一戳不该进会话"
+        print("ok 戳一戳回话")
+
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 

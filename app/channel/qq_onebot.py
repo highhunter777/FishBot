@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import logging
+import random
 import time
 import uuid
 from collections import OrderedDict
@@ -21,6 +22,7 @@ import websockets
 
 from ..domain import Caps, InboundEvent, OutboundAction
 from ..files import day_dir, download
+from ..persona import POKE_REPLIES
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ class OneBotChannel:
         self._fails = 0                 # 连续重连失败次数
         self._pending: dict[str, asyncio.Future] = {}
         self._seen: OrderedDict[str, float] = OrderedDict()
+        self._bg: set[asyncio.Task] = set()     # 后台回戳等轻任务
 
     # ---------- 连接 ----------
 
@@ -158,7 +161,11 @@ class OneBotChannel:
                 if payload.get("echo"):
                     self._resolve(payload)
                     continue
-                if payload.get("post_type") != "message":
+                post_type = payload.get("post_type")
+                if post_type == "notice":
+                    self._spawn_notice(payload)
+                    continue
+                if post_type != "message":
                     continue
                 event = self._to_event(payload)
                 if event is None or self._inbox is None:
@@ -266,6 +273,38 @@ class OneBotChannel:
             reply_to=message_id or None,
             raw={"message_id": message_id, "time": payload.get("time"), "group_id": payload.get("group_id")},
         )
+
+    def _spawn_notice(self, payload: dict) -> None:
+        """notice 放后台处理：读循环要留着收 echo，不能在这里 await 发送。"""
+        task = asyncio.create_task(self._on_notice(payload))
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+
+    async def _on_notice(self, payload: dict) -> None:
+        """被戳一戳时随机回一句话。"""
+        if payload.get("notice_type") != "notify" or payload.get("sub_type") != "poke":
+            return
+
+        user_id = str(payload.get("user_id") or "")
+        target_id = str(payload.get("target_id") or "")
+        if not user_id or (self.self_id and user_id == self.self_id):
+            return
+        if self.self_id and target_id and target_id != self.self_id:
+            return          # 戳的不是我
+
+        group_id = payload.get("group_id")
+        conv_id = f"g:{group_id}" if group_id else f"u:{user_id}"
+        if self._dedup(f"poke:{conv_id}:{user_id}:{payload.get('time')}"):
+            return
+
+        try:
+            await self.send(
+                conv_id,
+                OutboundAction("text", random.choice(POKE_REPLIES), at_user=user_id if group_id else ""),
+            )
+            log.info("回应戳一戳：%s %s", conv_id, user_id)
+        except Exception as exc:
+            log.warning("回应戳一戳失败：%s", exc)
 
     # ---------- 发送 ----------
 

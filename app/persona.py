@@ -86,6 +86,18 @@ GUEST_LINES = {
 }
 
 
+# 被戳一戳时随机回一句。不分主客，所以不出现「主人」称呼。
+POKE_REPLIES = (
+    "被戳到了喵。",
+    "干嘛呀喵。",
+    "在的在的喵。",
+    "别戳啦，痒喵。",
+    "哎，我在这儿喵。",
+    "嗯？叫我吗喵。",
+    "戳这么轻，是偷偷戳的吧喵。",
+)
+
+
 def lines(is_owner: bool) -> dict[str, str]:
     return OWNER_LINES if is_owner else GUEST_LINES
 
