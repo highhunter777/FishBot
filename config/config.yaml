@@ -157,11 +157,35 @@ media:
   synth_max_chars: 24
   synth_size: 512
 
-# 主动能力：定时提醒、启动时跟进被中断的任务
+# 玩法层：斗图与梗库
+entertainment:
+  doutu_enabled: true
+  doutu_max_per_hour: 20      # 每群每小时最多自动回几张表情
+  doutu_same_cooldown_s: 600  # 同一张表情多久内不重复用
+
+# 任务规划：多步任务先拆解，再逐步执行并校验；简单任务仍走原来的单轮
+planning:
+  enabled: true
+  max_steps: 5
+  min_chars: 30
+  keywords: ["然后", "并且", "同时", "分别", "整理", "排查", "修复", "部署", "实现", "重构", "分析", "对比", "步骤", "计划"]
+  step_timeout_s: 300
+  max_retries: 1
+  planner_agent: chat        # 用哪个 agent 做拆解与校验
+
+# 主动能力：定时提醒、启动时跟进被中断的任务、周期巡检
 proactive:
   enabled: true
   poll_s: 20
   interrupted_lookback_h: 24
+  patrol: true
+  patrol_s: 600              # 每 10 分钟巡检一次
+  quiet_hours: "23:00-08:00" # 静默时段不发巡检通知
+  stale_task_min: 30         # 任务卡住多久算异常
+  disk_min_gb: 5             # 磁盘剩余空间下限
+  inbox_max_gb: 2            # inbox 体积上限
+  notice_cooldown_s: 3600    # 同类通知最小间隔
+  patrol_conv: ""            # 空 = 自动取第一个 owner 的私聊
 
 # 语音消息：QQ 语音（SILK/AMR）先转文字再进会话
 # 模型目录不存在或没装 faster-whisper 时自动降级，只标记 [语音]

@@ -101,6 +101,7 @@ class OneBotChannel:
         media_store=None,
         captioner=None,
         media_cfg: MediaCfg | None = None,
+        doutu_check: Callable[[str], bool] | None = None,
     ) -> None:
         self.ws_url = ws_url
         self.access_token = access_token
@@ -113,6 +114,7 @@ class OneBotChannel:
         self.media_store = media_store          # media 元数据表：按哈希缓存 OCR/描述
         self.captioner = captioner              # 视觉描述：async (path, sticker) -> str
         self.media_cfg = media_cfg or MediaCfg()
+        self.doutu_check = doutu_check          # 群是否开启斗图；开启后表情可不 @
         self._ws = None
         self._inbox: asyncio.Queue | None = None
         self._write_lock = asyncio.Lock()
@@ -680,7 +682,10 @@ class OneBotChannel:
             recent = list(self._group_ctx.get(conv_id, []))
             self._remember_group(conv_id, payload, text)
             if self.group_requires_at and not at_self:
-                return None
+                sticker_seen = any(item.get("sticker") for item in attachments)
+                doutu = bool(sticker_seen and self.doutu_check and self.doutu_check(conv_id))
+                if not doutu:
+                    return None
 
         # 空白名单时只服务私聊，群聊一律不理，避免小号在群里被陌生人调用
         if not self.allowed_users and not is_private:

@@ -7,8 +7,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from .domain import OutboundAction
 from .store import Store
@@ -109,12 +111,20 @@ class Proactive:
     async def run(self) -> None:
         await asyncio.sleep(5)
         await self.recover_interrupted()
+        last_patrol = 0.0
         while True:
             await asyncio.sleep(max(2.0, self.cfg.proactive.poll_s))
             try:
                 await self.flush_due()
             except Exception:
                 log.exception("主动提醒投递失败")
+            patrol_s = max(60.0, self.cfg.proactive.patrol_s)
+            if self.cfg.proactive.patrol and time.monotonic() - last_patrol >= patrol_s:
+                last_patrol = time.monotonic()
+                try:
+                    await self.patrol_tick()
+                except Exception:
+                    log.exception("主动巡检失败")
 
     async def flush_due(self) -> int:
         """把到期的提醒发回原会话；发送失败的下轮再试。"""
@@ -160,6 +170,113 @@ class Proactive:
                 except Exception as exc:
                     log.warning("中断任务通知失败（%s）：%s", row["id"], exc)
             self.store.task_finish(row["id"], "interrupted", "进程中断后未完成")
+            self.store.task_step_interrupt(row["id"], "进程中断后未完成")
         if told:
             log.info("已跟进 %d 个中断任务", told)
         return told
+
+    # ---------- 周期巡检 ----------
+
+    def _media_root(self) -> Path | None:
+        agent = self.cfg.agents.get("worker")
+        if agent is None or not agent.cwd:
+            return None
+        return Path(agent.cwd)
+
+    def _quiet_now(self, now: datetime | None = None) -> bool:
+        spec = str(self.cfg.proactive.quiet_hours or "").strip()
+        if not spec or "-" not in spec:
+            return False
+        try:
+            start_s, end_s = spec.split("-", 1)
+            start_h, start_m = (int(part) for part in start_s.strip().split(":"))
+            end_h, end_m = (int(part) for part in end_s.strip().split(":"))
+        except ValueError:
+            return False
+        base = now or datetime.now()
+        current = base.hour * 60 + base.minute
+        start = start_h * 60 + start_m
+        end = end_h * 60 + end_m
+        return start <= current < end if start <= end else (current >= start or current < end)
+
+    def _patrol_target(self) -> tuple[str, object | None]:
+        conv = str(self.cfg.proactive.patrol_conv or "").strip()
+        if not conv:
+            owners = sorted(self.cfg.owner_users or self.cfg.allowed_users)
+            if not owners:
+                return "", None
+            conv = f"u:{owners[0]}"
+        channel = self.channels.get("qq_onebot")
+        if channel is None:
+            channel = next((item for item in self.channels.values() if hasattr(item, "send")), None)
+        return conv, channel
+
+    def _alerts(self, now_ts: float, respect_cooldown: bool = True) -> list[tuple[str, str]]:
+        cfg = self.cfg.proactive
+        alerts: list[tuple[str, str]] = []
+
+        for row in self.store.interrupted_tasks(since=0):
+            age = now_ts - int(row["started_at"])
+            if age < cfg.stale_task_min * 60:
+                continue
+            key = f"task:{row['id']}"
+            if respect_cooldown and not self.store.patrol_ready(key, cfg.notice_cooldown_s):
+                continue
+            alerts.append((key, f"任务 {row['id']} 已运行 {age / 60:.0f} 分钟"))
+
+        root = self._media_root()
+        if root is not None and root.exists():
+            try:
+                free_gb = shutil.disk_usage(root).free / (1024**3)
+                if free_gb < cfg.disk_min_gb:
+                    key = f"disk:{root}"
+                    if not respect_cooldown or self.store.patrol_ready(key, cfg.notice_cooldown_s * 6):
+                        alerts.append((key, f"{root.drive or root} 剩余空间 {free_gb:.1f}GB"))
+            except OSError:
+                pass
+
+            box = root / "inbox"
+            if box.is_dir():
+                try:
+                    total = sum(
+                        item.stat().st_size for item in box.rglob("*") if item.is_file()
+                    ) / (1024**3)
+                except OSError:
+                    total = 0.0
+                if total > cfg.inbox_max_gb:
+                    key = f"inbox:{root}"
+                    if not respect_cooldown or self.store.patrol_ready(key, cfg.notice_cooldown_s * 6):
+                        alerts.append((key, f"inbox 已占用 {total:.1f}GB"))
+
+        return alerts
+
+    async def patrol_tick(self, *, send: bool = True) -> list[str]:
+        if self._quiet_now():
+            return []
+        alerts = self._alerts(time.time())
+        if not alerts:
+            return []
+        messages = [message for _key, message in alerts]
+        if not send:
+            return messages
+        conv, channel = self._patrol_target()
+        if channel is None or not conv:
+            log.warning("巡检有异常但找不到可通知的渠道：%s", messages)
+            return messages
+        action = OutboundAction("text", "巡检：\n" + "\n".join(f"- {item}" for item in messages))
+        try:
+            await channel.send(conv, action)
+        except Exception as exc:
+            log.warning("巡检通知发送失败：%s", exc)
+            return messages
+        for key, _message in alerts:
+            self.store.patrol_mark(key)
+        log.info("已发送巡检通知：%s", messages)
+        return messages
+
+    async def patrol_report(self) -> str:
+        """手动 /patrol：只报告，不发通知，也不更新冷却。"""
+        alerts = self._alerts(time.time(), respect_cooldown=False)
+        if not alerts:
+            return "巡检正常，没发现异常喵。"
+        return "巡检发现：\n" + "\n".join(f"- {message}" for _key, message in alerts)

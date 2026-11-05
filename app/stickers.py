@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 from pathlib import Path
 
@@ -104,6 +105,76 @@ def resolve(name: str) -> Path | None:
 
 def names() -> list[str]:
     return sorted(available())
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[\s:：_，。！？、!?\-]+", "", str(text or "")).lower()
+
+
+def _entries() -> list[dict]:
+    """把素材目录和 index.json 合成梗库条目：键名、路径、标签、说明。"""
+    raw: dict[str, dict] = {}
+    path = DIR / "index.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for item in data.get("items") or []:
+                if isinstance(item, dict) and item.get("file"):
+                    raw[Path(str(item["file"])).stem] = item
+        except Exception as exc:
+            log.warning("梗库索引读取失败：%s", exc)
+
+    entries = []
+    for key, file_path in available().items():
+        item = raw.get(key) or {}
+        tags = [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()]
+        if key not in tags:
+            tags.insert(0, key)
+        note = NOTES.get(key, "")
+        alt = str(item.get("alt") or note or key).strip()
+        entries.append({"key": key, "path": file_path, "tags": tags, "alt": alt})
+    return entries
+
+
+def search(query: str, limit: int = 3) -> list[dict]:
+    """按键名/标签/说明做粗匹配；返回得分最高的条目。"""
+    q = _norm(query)
+    if not q:
+        return []
+    hits: list[tuple[int, dict]] = []
+    for item in _entries():
+        score = 0
+        key = _norm(item["key"])
+        if q == key:
+            score += 100
+        elif q in key or key in q:
+            score += 30
+        for tag in item["tags"]:
+            value = _norm(tag)
+            if not value:
+                continue
+            if q == value:
+                score += 20
+            elif q in value or value in q:
+                score += 15
+        if q in _norm(item["alt"]):
+            score += 10
+        if q in _norm(NOTES.get(item["key"], "")):
+            score += 5
+        if score:
+            hits.append((score, item))
+    hits.sort(key=lambda pair: (-pair[0], pair[1]["key"]))
+    return [item for _score, item in hits[: max(0, limit)]]
+
+
+def pick_reply(query: str, recent: set[str] | None = None) -> dict | None:
+    """挑一个用于斗图/回应的表情；优先语义匹配，其次随机，避开最近用过的。"""
+    recent = recent or set()
+    for item in search(query, limit=12):
+        if item["key"] not in recent:
+            return item
+    candidates = [item for item in _entries() if item["key"] not in recent]
+    return random.choice(candidates) if candidates else None
 
 
 def extract(text: str) -> tuple[str, list[str]]:

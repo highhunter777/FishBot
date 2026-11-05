@@ -6,6 +6,7 @@ bridge 是 client，agent 是 server（stdio 子进程）。
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -29,6 +30,37 @@ from ..permission import Verdict, evaluate
 from .port import AgentError
 
 log = logging.getLogger(__name__)
+
+
+def _tool_data(update) -> dict:
+    return {
+        "title": getattr(update, "title", "") or "",
+        "kind": getattr(update, "kind", "") or "",
+        "status": getattr(update, "status", "") or "",
+    }
+
+
+def _tool_output(update) -> str:
+    """尽量把工具输出摘出来，供任务校验判断“到底做成了没有”。"""
+    parts: list[str] = []
+    raw = getattr(update, "raw_output", None) or getattr(update, "rawOutput", None)
+    if raw:
+        if isinstance(raw, (dict, list)):
+            try:
+                parts.append(json.dumps(raw, ensure_ascii=False))
+            except TypeError:
+                parts.append(str(raw))
+        else:
+            parts.append(str(raw))
+    for block in getattr(update, "content", None) or []:
+        text = getattr(block, "text", None)
+        if text:
+            parts.append(str(text))
+            continue
+        inner = getattr(block, "content", None)
+        if inner is not None:
+            parts.append(str(getattr(inner, "text", "") or inner))
+    return "\n".join(part for part in parts if part).strip()[:800]
 
 PERMISSION_TIMEOUT_S = 180.0
 
@@ -272,19 +304,16 @@ class AcpAdapter:
         if kind == "tool_call":
             self._emit(
                 session_id,
-                AgentEvent(
-                    "tool_call",
-                    data={
-                        "title": getattr(update, "title", "") or "",
-                        "kind": getattr(update, "kind", "") or "",
-                        "status": getattr(update, "status", "") or "",
-                    },
-                )
+                AgentEvent("tool_call", data={**_tool_data(update), "output": _tool_output(update)}),
             )
             return
 
         if kind == "tool_call_update":
             status = getattr(update, "status", "") or ""
+            self._emit(
+                session_id,
+                AgentEvent("tool_call", data={**_tool_data(update), "output": _tool_output(update)}),
+            )
             if status in ("failed", "error"):
                 self._emit(session_id, AgentEvent("progress", text="这步没成。"))
             return

@@ -75,7 +75,33 @@ CREATE TABLE IF NOT EXISTS task (
     status     TEXT NOT NULL,
     started_at INTEGER NOT NULL,
     ended_at   INTEGER,
-    error      TEXT
+    error      TEXT,
+    state      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_step (
+    task_id    TEXT NOT NULL,
+    idx        INTEGER NOT NULL,
+    goal       TEXT NOT NULL,
+    check_text TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'pending',
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    evidence   TEXT NOT NULL DEFAULT '',
+    started_at INTEGER,
+    ended_at   INTEGER,
+    PRIMARY KEY (task_id, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_task_step_task ON task_step(task_id, idx);
+
+CREATE TABLE IF NOT EXISTS patrol (
+    key     TEXT PRIMARY KEY,
+    last_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_setting (
+    conv_id    TEXT PRIMARY KEY,
+    doutu      INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS agent_session (
@@ -135,6 +161,10 @@ class Store:
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(message)")}
         if "vector" not in cols:
             conn.execute("ALTER TABLE message ADD COLUMN vector BLOB")
+
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(task)")}
+        if "state" not in cols:
+            conn.execute("ALTER TABLE task ADD COLUMN state TEXT")
 
         # 会话映射改用 (agent, session_key)：多进程各自持自己的 session_id
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(agent_session)")}
@@ -424,6 +454,92 @@ class Store:
             conn.execute(
                 "UPDATE task SET status=?, ended_at=?, error=? WHERE id=?",
                 (status, int(time.time()), error, task_id),
+            )
+
+    def task_step_reset(self, task_id: str, steps: list[dict]) -> None:
+        """按计划重建步骤行；旧行先清掉，避免重跑残留。"""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM task_step WHERE task_id=?", (task_id,))
+            conn.executemany(
+                "INSERT INTO task_step(task_id, idx, goal, check_text, status) "
+                "VALUES (?,?,?,?, 'pending')",
+                [
+                    (task_id, index, str(step.get("goal") or ""), str(step.get("check") or ""))
+                    for index, step in enumerate(steps, 1)
+                ],
+            )
+
+    def task_step_start(self, task_id: str, idx: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE task_step SET status='running', attempts=attempts+1, "
+                "started_at=?, ended_at=NULL WHERE task_id=? AND idx=?",
+                (int(time.time()), task_id, idx),
+            )
+
+    def task_step_finish(
+        self, task_id: str, idx: int, passed: bool, evidence: str = "", reason: str = ""
+    ) -> None:
+        detail = str(evidence or "")[:2000]
+        if reason:
+            detail = f"{detail}\n校验：{reason}"[:2200]
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE task_step SET status=?, evidence=?, ended_at=? WHERE task_id=? AND idx=?",
+                ("passed" if passed else "failed", detail, int(time.time()), task_id, idx),
+            )
+
+    def task_step_interrupt(self, task_id: str, reason: str = "进程中断") -> None:
+        """任务被中断时，把还没结束的步骤标成失败，留下原因。"""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE task_step SET status='failed', evidence=CASE WHEN evidence='' THEN ? "
+                "ELSE evidence END, ended_at=? WHERE task_id=? AND status IN ('pending','running')",
+                (reason, int(time.time()), task_id),
+            )
+
+    def task_steps(self, task_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT idx, goal, check_text, status, attempts, evidence, started_at, ended_at "
+                "FROM task_step WHERE task_id=? ORDER BY idx",
+                (task_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    # ---------- patrol（巡检去重） ----------
+
+    def patrol_ready(self, key: str, cooldown_s: float) -> bool:
+        """距离上次同类巡检通知是否已超过冷却时间。"""
+        now = int(time.time())
+        with self._connect() as conn:
+            row = conn.execute("SELECT last_at FROM patrol WHERE key=?", (key,)).fetchone()
+        return row is None or now - int(row["last_at"]) >= int(cooldown_s)
+
+    def patrol_mark(self, key: str, at: int | None = None) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO patrol(key, last_at) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET last_at=excluded.last_at",
+                (key, int(time.time()) if at is None else at),
+            )
+
+    # ---------- group setting ----------
+
+    def group_doutu(self, conv_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT doutu FROM group_setting WHERE conv_id=?", (conv_id,)
+            ).fetchone()
+        return bool(row["doutu"]) if row else False
+
+    def set_group_doutu(self, conv_id: str, enabled: bool) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO group_setting(conv_id, doutu, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(conv_id) DO UPDATE SET doutu=excluded.doutu, "
+                "updated_at=excluded.updated_at",
+                (conv_id, 1 if enabled else 0, int(time.time())),
             )
 
     def interrupted_tasks(self, since: int | None = None) -> list[dict]:

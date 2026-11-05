@@ -73,6 +73,7 @@ def _build_qq(cfg: Config, store: Store) -> OneBotChannel | None:
         media_store=store,
         captioner=vision.Captioner(cfg) if cfg.media.caption else None,
         media_cfg=cfg.media,
+        doutu_check=store.group_doutu,
     )
 
 

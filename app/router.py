@@ -4,11 +4,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import time
 from dataclasses import replace
 from typing import AsyncIterator
 
-from . import persona, stickers, synth
+from . import persona, planner, stickers, synth
 from .agent.port import AgentPort
 from .approval import ApprovalGate, parse_answer
 from .config import Config
@@ -16,6 +17,7 @@ from .domain import AgentEvent, Caps, InboundEvent, OutboundAction
 from .proactive import format_when, parse_when
 from .session import SessionService
 from .store import Store
+from .task_runner import TaskRunner
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +46,9 @@ class Router:
         self.channels: dict[str, object] = {}  # 渠道实例，供 /recall /poke 用
         self.proactive = None                  # main 装配后注入
         self.tts = None                        # main 装配后注入
+        self.task_runner = TaskRunner(cfg, store, agents)
+        self._doutu_hits: dict[str, list[float]] = {}
+        self._recent_stickers: dict[str, dict[str, float]] = {}
         self._last_call: dict[tuple[str, str], float] = {}
 
     def attach_channels(self, channels: dict[str, object]) -> None:
@@ -58,6 +63,43 @@ class Router:
             return True
         owners = self.cfg.owner_users or self.cfg.allowed_users
         return bool(owners) and ev.user_id in owners
+
+    @staticmethod
+    def _only_sticker(ev: InboundEvent) -> bool:
+        if not any(item.get("sticker") for item in ev.attachments):
+            return False
+        # 入站表情的文本全是系统标记：整行以 [ 开头的都算元数据
+        clean = "\n".join(
+            line for line in (ev.text or "").splitlines() if not line.strip().startswith("[")
+        ).strip()
+        return not clean
+
+    async def _doutu(self, ev: InboundEvent) -> AsyncIterator[OutboundAction]:
+        cfg = self.cfg.entertainment
+        now = time.monotonic()
+        hits = [stamp for stamp in self._doutu_hits.get(ev.conv_id, []) if now - stamp < 3600]
+        if len(hits) >= cfg.doutu_max_per_hour:
+            return
+
+        match = re.search(r"\[表情含义\]\s*([^\n]+)", ev.text or "")
+        query = match.group(1).strip() if match else ""
+        if not query:
+            query = " ".join(
+                str(item.get("caption") or item.get("summary") or "")
+                for item in ev.attachments
+            ).strip()
+
+        recent = self._recent_stickers.get(ev.conv_id, {})
+        recent = {key: stamp for key, stamp in recent.items() if now - stamp < cfg.doutu_same_cooldown_s}
+        meme = stickers.pick_reply(query, set(recent))
+        if meme is None:
+            return
+
+        hits.append(now)
+        self._doutu_hits[ev.conv_id] = hits
+        recent[meme["key"]] = now
+        self._recent_stickers[ev.conv_id] = recent
+        yield OutboundAction("image", media=str(meme["path"]), delay=0.2)
 
     # ---------- 入口 ----------
 
@@ -97,6 +139,17 @@ class Router:
 
         if not self._pass_rate(ev):
             yield OutboundAction("text", words["busy"], delay=0.2)
+            return
+
+        if (
+            not text.startswith("/")
+            and not ev.is_private
+            and self.cfg.entertainment.doutu_enabled
+            and self._only_sticker(ev)
+            and self.store.group_doutu(ev.conv_id)
+        ):
+            async for action in self._doutu(ev):
+                yield action
             return
 
         if text.startswith("/"):
@@ -195,7 +248,7 @@ class Router:
             yield OutboundAction("voice", media=path, delay=0.2)
             return
 
-        if cmd in ("/表情", "/贴纸", "/meme", "/合成"):
+        if cmd in ("/表情", "/贴纸", "/合成"):
             if not rest:
                 yield OutboundAction("text", words["synth_usage"], delay=0.2)
                 return
@@ -218,6 +271,44 @@ class Router:
             yield OutboundAction("image", media=path, delay=0.3)
             return
 
+        if cmd in ("/梗", "/meme", "/梗图"):
+            query = rest.strip()
+            if not query:
+                yield OutboundAction(
+                    "text", "梗库：\n" + "、".join(stickers.names()), delay=0.2
+                )
+                return
+            hits = stickers.search(query, limit=1)
+            if not hits:
+                yield OutboundAction("text", words["meme_none"], delay=0.2)
+                return
+            item = hits[0]
+            yield OutboundAction(
+                "image", media=str(item["path"]), text=str(item["alt"]), delay=0.2
+            )
+            return
+
+        if cmd in ("/斗图", "/doutu"):
+            if ev.is_private:
+                yield OutboundAction("text", words["doutu_private"], delay=0.2)
+                return
+            if not self.cfg.entertainment.doutu_enabled:
+                yield OutboundAction("text", words["no_agent"], delay=0.2)
+                return
+            current = self.store.group_doutu(ev.conv_id)
+            choice = rest.strip().lower()
+            if choice in ("开", "on", "开启", "开吧"):
+                enabled = True
+            elif choice in ("关", "off", "关闭"):
+                enabled = False
+            else:
+                enabled = not current
+            self.store.set_group_doutu(ev.conv_id, enabled)
+            yield OutboundAction(
+                "text", words["doutu_on"] if enabled else words["doutu_off"], delay=0.2
+            )
+            return
+
         if cmd in ("/rules", "/反馈", "/规矩"):
             rows: list[str] = []
             for scope in self.agents:
@@ -225,6 +316,14 @@ class Router:
                 if rules:
                     rows.append(f"[{scope}] " + "；".join(rules))
             yield OutboundAction("text", "\n".join(rows) if rows else words["no_rules"], delay=0.2)
+            return
+
+        if cmd in ("/patrol", "/巡检"):
+            if self.proactive is None:
+                yield OutboundAction("text", words["no_agent"], delay=0.2)
+                return
+            text = await self.proactive.patrol_report()
+            yield OutboundAction("text", text, delay=0.2)
             return
 
         if cmd in ("/recall", "/撤回"):
@@ -258,6 +357,14 @@ class Router:
                 yield action
             return
 
+        if cmd in ("/plan", "/规划"):
+            if not rest:
+                yield OutboundAction("text", words["plan_usage"], delay=0.2)
+                return
+            async for action in self._chat(ev, rest, force_agent="worker", force_plan=True):
+                yield action
+            return
+
         yield OutboundAction("text", words["unknown_cmd"], delay=0.2)
 
     # ---------- 对话 ----------
@@ -267,6 +374,7 @@ class Router:
         ev: InboundEvent,
         text: str,
         force_agent: str | None = None,
+        force_plan: bool = False,
     ) -> AsyncIterator[OutboundAction]:
         agent_name = force_agent or self.cfg.agent_for(
             channel=ev.channel, is_private=ev.is_private, text=text
@@ -314,6 +422,41 @@ class Router:
             if resumable:
                 self.store.set_agent_session(agent_name, ev.session_key, session_id)
             messages = self.sessions.context(ev, agent_cfg, scope, guard=guard)
+
+            plan_mode = (
+                agent_name == "worker"
+                and not agent_cfg.read_only
+                and (force_plan or (force_agent == "worker" and planner.should_plan(text, self.cfg)))
+            )
+            if plan_mode and self.task_runner is not None:
+                verbose = ev.channel in ("web", "cli")
+                try:
+                    async for action in self.task_runner.run(
+                        ev,
+                        text,
+                        worker=agent,
+                        worker_session_id=session_id,
+                        messages=messages,
+                        task_id=task_id,
+                        verbose=verbose,
+                    ):
+                        if action.kind == "text" and action.text:
+                            for rendered in self._text_actions(action.text, caps, sink):
+                                yield rendered
+                        else:
+                            yield action
+                    full = "".join(sink).strip()
+                    if full:
+                        self.sessions.remember(ev, full, scope)
+                except asyncio.CancelledError:
+                    self.store.task_finish(task_id, "cancelled")
+                    raise
+                except Exception as exc:
+                    log.exception("规划任务执行失败：%s", agent_name)
+                    self.store.task_finish(task_id, "error", f"{type(exc).__name__}: {exc}")
+                    yield OutboundAction("text", words["error"], delay=0.3)
+                return
+
             # 用队列转发：直接对 async generator 做 wait_for 超时会被取消弄坏，
             # 表现是首字慢一点之后就再也没有输出。
             queue: asyncio.Queue = asyncio.Queue()

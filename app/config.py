@@ -116,10 +116,39 @@ class MediaCfg:
 
 
 @dataclass(slots=True)
+class EntertainmentCfg:
+    doutu_enabled: bool = True
+    doutu_max_per_hour: int = 20
+    doutu_same_cooldown_s: float = 600.0
+
+
+@dataclass(slots=True)
+class PlanningCfg:
+    enabled: bool = True
+    max_steps: int = 5
+    min_chars: int = 30
+    keywords: list[str] = field(default_factory=lambda: [
+        "然后", "并且", "同时", "分别", "整理", "排查", "修复", "部署",
+        "实现", "重构", "分析", "对比", "步骤", "计划",
+    ])
+    step_timeout_s: float = 300.0
+    max_retries: int = 1
+    planner_agent: str = "chat"
+
+
+@dataclass(slots=True)
 class ProactiveCfg:
     enabled: bool = True
     poll_s: float = 20.0              # 多久查一次到期提醒
     interrupted_lookback_h: float = 24.0   # 启动时回看多久内的中断任务
+    patrol: bool = True
+    patrol_s: float = 600.0           # 巡检间隔
+    quiet_hours: str = "23:00-08:00"  # 静默时段，巡检不打扰
+    stale_task_min: float = 30.0      # 任务卡住多久算异常
+    disk_min_gb: float = 5.0          # 磁盘剩余空间下限
+    inbox_max_gb: float = 2.0         # inbox 体积上限
+    notice_cooldown_s: float = 3600.0 # 同类巡检通知的最小间隔
+    patrol_conv: str = ""             # 空 = 自动取第一个 owner 的私聊
 
 
 @dataclass(slots=True)
@@ -149,6 +178,8 @@ class Config:
     tts: TtsCfg = field(default_factory=TtsCfg)
     ocr: OcrCfg = field(default_factory=OcrCfg)
     media: MediaCfg = field(default_factory=MediaCfg)
+    entertainment: EntertainmentCfg = field(default_factory=EntertainmentCfg)
+    planning: PlanningCfg = field(default_factory=PlanningCfg)
     proactive: ProactiveCfg = field(default_factory=ProactiveCfg)
 
     def agent_for(self, *, channel: str, is_private: bool, text: str) -> str:
@@ -207,6 +238,8 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
     tts = TtsCfg(**dict(raw.get("tts") or {}))
     ocr = OcrCfg(**dict(raw.get("ocr") or {}))
     media = MediaCfg(**dict(raw.get("media") or {}))
+    entertainment = EntertainmentCfg(**dict(raw.get("entertainment") or {}))
+    planning = PlanningCfg(**dict(raw.get("planning") or {}))
     proactive = ProactiveCfg(**dict(raw.get("proactive") or {}))
 
     return Config(
@@ -225,5 +258,7 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
         tts=tts,
         ocr=ocr,
         media=media,
+        entertainment=entertainment,
+        planning=planning,
         proactive=proactive,
     )
