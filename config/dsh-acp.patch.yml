@@ -80,7 +80,7 @@
   config:
     provider: opencode-go
     model: deepseek-v4.1-flash
-    reasoningEffort: max
+    reasoningEffort: high
 
 # ACP 会话实际用的是这一份（默认锁死在 deepseek-official），必须一起改
 - id: acp
@@ -88,6 +88,7 @@
   config:
     provider: opencode-go
     model: deepseek-v4.1-flash
+    reasoningEffort: high
 
 # 只读实例（worker_lite）：文件工具本来就被限制在 cwd 内，
 # 再把能绕过它读全盘的进程执行类工具关掉。owner 的 worker 不受影响。
