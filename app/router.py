@@ -5,6 +5,7 @@ import asyncio
 import logging
 import random
 import time
+from dataclasses import replace
 from typing import AsyncIterator
 
 from . import persona, stickers
@@ -12,6 +13,7 @@ from .agent.port import AgentPort
 from .approval import ApprovalGate, parse_answer
 from .config import Config
 from .domain import AgentEvent, Caps, InboundEvent, OutboundAction
+from .proactive import format_when, parse_when
 from .session import SessionService
 from .store import Store
 
@@ -40,6 +42,8 @@ class Router:
         self.gate = gate or ApprovalGate()
         self.primary = cfg.default_agent       # 指令作用于这个后端的记忆
         self.channels: dict[str, object] = {}  # 渠道实例，供 /recall /poke 用
+        self.proactive = None                  # main 装配后注入
+        self.tts = None                        # main 装配后注入
         self._last_call: dict[tuple[str, str], float] = {}
 
     def attach_channels(self, channels: dict[str, object]) -> None:
@@ -60,7 +64,10 @@ class Router:
     async def stream(self, ev: InboundEvent) -> AsyncIterator[OutboundAction]:
         text = (ev.text or "").strip()
         if not text:
-            return
+            if not ev.attachments:
+                return
+            text = "[附件]"
+            ev = replace(ev, text=text)     # 只有附件时也给模型一个落点
 
         local = ev.channel in ("web", "cli")     # 本机渠道不走白名单
         if not local and self.cfg.allowed_users and ev.user_id not in self.cfg.allowed_users:
@@ -135,6 +142,66 @@ class Router:
                     body = "，".join(f"{k}={v}" for k, v in items.items())
                     rows.append(f"[{scope}] {body}")
             yield OutboundAction("text", "\n".join(rows) if rows else words["empty_profile"], delay=0.2)
+            return
+
+        if cmd in ("/remind", "/提醒", "/reminder"):
+            if self.proactive is None:
+                yield OutboundAction("text", words["no_agent"], delay=0.2)
+                return
+            if not rest:
+                rows = self.store.pending_reminders(ev.channel, ev.conv_id)
+                if not rows:
+                    yield OutboundAction("text", words["remind_none"], delay=0.2)
+                    return
+                lines = [
+                    f"{r['id']}  {format_when(r['due_at'])}  {r['content']}"
+                    for r in rows
+                ]
+                yield OutboundAction("text", "待提醒：\n" + "\n".join(lines), delay=0.2)
+                return
+            head, _, tail = rest.partition(" ")
+            if head in ("cancel", "取消", "删"):
+                ok = bool(tail.strip()) and self.store.cancel_reminder(
+                    tail.strip(), ev.channel, ev.conv_id
+                )
+                yield OutboundAction(
+                    "text", words["remind_cancel"] if ok else words["remind_cancel_fail"], delay=0.2
+                )
+                return
+            parsed = parse_when(rest)
+            if parsed is None:
+                yield OutboundAction("text", words["remind_fmt"], delay=0.2)
+                return
+            due, content = parsed
+            self.store.add_reminder(ev.channel, ev.conv_id, ev.user_id, content, due)
+            yield OutboundAction(
+                "text",
+                words["remind_set"].format(when=format_when(due), content=content),
+                delay=0.2,
+            )
+            return
+
+        if cmd in ("/voice", "/语音", "/say"):
+            if not rest:
+                yield OutboundAction("text", words["voice_usage"], delay=0.2)
+                return
+            if self.tts is None:
+                yield OutboundAction("text", words["no_agent"], delay=0.2)
+                return
+            path = await self.tts.speak(rest)
+            if not path:
+                yield OutboundAction("text", words["voice_fail"], delay=0.2)
+                return
+            yield OutboundAction("voice", media=path, delay=0.2)
+            return
+
+        if cmd in ("/rules", "/反馈", "/规矩"):
+            rows: list[str] = []
+            for scope in self.agents:
+                rules = self.store.feedback_rules(ev.user_id, scope, limit=10)
+                if rules:
+                    rows.append(f"[{scope}] " + "；".join(rules))
+            yield OutboundAction("text", "\n".join(rows) if rows else words["no_rules"], delay=0.2)
             return
 
         if cmd in ("/recall", "/撤回"):
@@ -297,9 +364,11 @@ class Router:
                 yield OutboundAction("text", event.text, delay=0.2)
 
             elif event.kind == "tool_call":
-                title = (event.data or {}).get("title") or ""
-                if title:
-                    yield OutboundAction("text", words["tool"].format(title), delay=0.2)
+                # QQ 等推送渠道静默：频繁的“在弄 xx”既刷屏又容易触发风控
+                if ev.channel in ("web", "cli"):
+                    title = (event.data or {}).get("title") or ""
+                    if title:
+                        yield OutboundAction("text", words["tool"].format(title), delay=0.2)
 
             elif event.kind == "permission":
                 pending = "".join(buf).strip()

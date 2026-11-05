@@ -65,8 +65,11 @@ class MemoryCfg:
     agent: str = "chat"          # 用哪个后端的模型做摘要与抽取
     summarize: bool = True
     extract_facts: bool = True
-    recall: bool = True          # 相关性召回（字符 n-gram + IDF）
+    recall: bool = True          # 相关性召回（向量优先，失败退回字符 n-gram + IDF）
     recall_k: int = 5
+    embedding: bool = True
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    recall_decay_days: float = 30.0   # 越久远的对话召回权重越低
 
 
 @dataclass(slots=True)
@@ -74,6 +77,29 @@ class SttCfg:
     enabled: bool = True
     model: str = "models/whisper-small"   # 相对仓库根目录或绝对路径
     language: str = "zh"
+
+
+@dataclass(slots=True)
+class TtsCfg:
+    enabled: bool = True
+    voice: str = "zh-CN-XiaoxiaoNeural"
+    rate: str = "+0%"
+    max_chars: int = 200
+    proxy: str = ""            # edge-tts 走代理时填，如 http://127.0.0.1:7890
+
+
+@dataclass(slots=True)
+class OcrCfg:
+    enabled: bool = True
+    min_score: float = 0.6
+    max_chars: int = 1200
+
+
+@dataclass(slots=True)
+class ProactiveCfg:
+    enabled: bool = True
+    poll_s: float = 20.0              # 多久查一次到期提醒
+    interrupted_lookback_h: float = 24.0   # 启动时回看多久内的中断任务
 
 
 @dataclass(slots=True)
@@ -100,6 +126,9 @@ class Config:
     memory: MemoryCfg = field(default_factory=MemoryCfg)
     alerts: AlertCfg = field(default_factory=AlertCfg)
     stt: SttCfg = field(default_factory=SttCfg)
+    tts: TtsCfg = field(default_factory=TtsCfg)
+    ocr: OcrCfg = field(default_factory=OcrCfg)
+    proactive: ProactiveCfg = field(default_factory=ProactiveCfg)
 
     def agent_for(self, *, channel: str, is_private: bool, text: str) -> str:
         for rule in self.routes:
@@ -154,6 +183,9 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
     memory = MemoryCfg(**dict(raw.get("memory") or {}))
     alerts = AlertCfg(**dict(raw.get("alerts") or {}))
     stt = SttCfg(**dict(raw.get("stt") or {}))
+    tts = TtsCfg(**dict(raw.get("tts") or {}))
+    ocr = OcrCfg(**dict(raw.get("ocr") or {}))
+    proactive = ProactiveCfg(**dict(raw.get("proactive") or {}))
 
     return Config(
         db_path=db_path,
@@ -167,4 +199,8 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
         default_agent=default_agent,
         memory=memory,
         alerts=alerts,
+        stt=stt,
+        tts=tts,
+        ocr=ocr,
+        proactive=proactive,
     )

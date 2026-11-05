@@ -39,7 +39,10 @@ OWNER_LINES = {
         "想戳一下——/poke\n"
         "嫌我记太多——/new 清一清\n"
         "想让我记着——/remember 键=值\n"
-        "看我记了啥——/profile"
+        "看我记了啥——/profile\n"
+        "看我学到的规矩——/rules\n"
+        "想被提醒——/remind 10m 喝水\n"
+        "想听语音——/voice 你好呀"
     ),
     "denied": "这个得主人来喵。",
     "unknown_cmd": "没这个指令喵，/help 看看？",
@@ -57,6 +60,14 @@ OWNER_LINES = {
     "recall_fail": "没找到能撤回的消息喵。",
     "poked": "戳到了喵。",
     "poke_fail": "戳不动…可能对方不接受喵。",
+    "remind_fmt": "时间没看懂喵。格式：/remind 10m 喝水，或 /remind 2026-11-06 08:00 起床",
+    "remind_set": "好，{when} 提醒你：{content}",
+    "remind_none": "没有待提醒的事喵。",
+    "no_rules": "还没学到什么规矩喵。",
+    "voice_usage": "要说什么呀？格式：/voice 你好呀",
+    "voice_fail": "语音没生成出来喵，等下再试试。",
+    "remind_cancel": "删掉了喵。",
+    "remind_cancel_fail": "没找到这条提醒喵。",
 }
 
 GUEST_LINES = {

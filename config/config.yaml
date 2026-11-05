@@ -116,6 +116,31 @@ memory:
   agent: chat            # 用哪个后端的模型
   summarize: true        # 超 40 条时用 LLM 压缩（失败自动退回规则拼接）
   extract_facts: true    # 从私聊里抽取长期事实写入画像
+  recall: true           # 相关性召回
+  recall_k: 5
+  embedding: true        # 本地 BAAI/bge-small-zh-v1.5；模型缺失时自动退回字面匹配
+  embedding_model: BAAI/bge-small-zh-v1.5
+  recall_decay_days: 30  # 越久远的内容召回权重越低
+
+# 语音回复：/voice 文本 -> edge-tts -> SILK 发回 QQ
+tts:
+  enabled: true
+  voice: zh-CN-XiaoxiaoNeural
+  rate: "+0%"
+  max_chars: 200
+  proxy: http://127.0.0.1:7890   # edge-tts 走本机代理；不需要就留空
+
+# 图片文字识别：截图/报错图先本地 OCR，结果随消息进会话
+ocr:
+  enabled: true
+  min_score: 0.6
+  max_chars: 1200
+
+# 主动能力：定时提醒、启动时跟进被中断的任务
+proactive:
+  enabled: true
+  poll_s: 20
+  interrupted_lookback_h: 24
 
 # 语音消息：QQ 语音（SILK/AMR）先转文字再进会话
 # 模型目录不存在或没装 faster-whisper 时自动降级，只标记 [语音]
