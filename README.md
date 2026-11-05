@@ -72,8 +72,13 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 | 能力 | 状态 |
 |---|---|
 | Web 聊天页（流式 + 打字节奏） | 完成 |
-| QQ 小号（NapCat OneBot 11，@ 触发、去重、重连） | 完成（待真机联调） |
+| QQ 小号（NapCat OneBot 11，@ 触发、去重、重连） | 完成（已真机验收） |
 | 图片/表情接收（落盘到 `inbox/`，只有表情不带字也会回） | 完成 |
+| 图片压缩 + 视觉描述（长边 1024，按哈希缓存） | 完成 |
+| 媒体元数据表（类型/哈希/OCR/描述/TTL） | 完成 |
+| 文档理解（QQ 文件 → pdf/docx/xlsx/pptx/txt，预览入会话） | 完成 |
+| 动图理解（抽取 6 帧拼图 + 一句描述） | 完成 |
+| 表情合成（`/表情` 文字卡片或已有表情做底图） | 完成 |
 | 表情包（内置 15 张 DeepSeek 鲸鱼娘，`[表情:键名]` 触发） | 完成 |
 | 语音消息（SILK/AMR → 本地 whisper 转写） | 完成 |
 | 戳一戳（连回 3 次后冷却 5 秒） | 完成 |
@@ -95,10 +100,14 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 
 ## 语音与表情
 
-- **图片**：入站图片在 handler 任务里后台下载到 `inbox/日期/`，不挡后续消息；单文件超过 10 MB 直接丢弃。普通图片先跑本地 RapidOCR，识别到的文字以 `[图片文字] ...` 随消息进会话；最近 3 张图会在 10 分钟内保留，后续问“刚才那张”时把路径注入提示词。
+- **图片**：入站图片在 handler 任务里后台下载到 `inbox/日期/`，不挡后续消息；单文件超过 10 MB 直接丢弃。下载后先按魔数纠正扩展名（GIF 不再被当成 JPEG），再用内容哈希查 `media` 表：命中就复用 OCR 和描述，重复图片只留一份。普通图片先跑本地 RapidOCR，识别到的文字以 `[图片文字] ...` 随消息进会话；随后压到长边 1024 的 JPEG，交给视觉模型生成一句 `[图片描述] ...`。最近 3 张图会在 10 分钟内保留（带描述），后续问“刚才那张”时把路径和描述注入提示词。
+- **媒体缓存**：`media` 表按 `sha256` 存类型、路径、MIME、OCR、描述和 `expires_at`，默认 7 天（`config.yaml` 的 `media.ttl_days`）；启动和写入时清理过期行。描述用 `media.caption_agent` 指向的 OpenAI 兼容接口，接口不支持图片时本次运行自动停用，不影响聊天。
+- **动图**：GIF/动图按时间均匀抽最多 6 帧拼成一张联系表，交给视觉模型概括动作或情绪，以 `[动图] N 帧` + `[动图描述] ...` 进会话；拼图按哈希缓存，同一张动图不会重复抽帧。
+- **文档**：QQ 文件消息（`file`）下载到 `inbox/日期/`，按后缀抽取正文：PDF 用 `pypdf`，DOCX 用 `python-docx`，XLSX 用 `openpyxl`，PPTX 用 `python-pptx`，纯文本直接读。预览（默认 3000 字）以 `[文件内容] ...` 进会话，完整文本另存为 `<文件>.txt` 供 agent 读取；单文件默认上限 20 MB，PDF 最多看 30 页。
+- **表情合成**：`/表情 好耶` 生成本地文字卡片；`/表情 开心 好耶` 用内置表情做底图并在底部加字。PIL 直接合成，不调模型，输出到 `data/generated/`。
 - **语音**：QQ 语音先落到工作目录的 `inbox/`，`pilk` 解 SILK 后由本地 `faster-whisper` 转写，文本以 `[语音] ...` 进会话；模型默认放 `models/whisper-small`（已在 `.gitignore`）。没装依赖或模型缺失时自动降级为只标记 `[语音]`。
-- **表情**：`assets/stickers/` 内置 15 张 DeepSeek 鲸鱼娘（大肥鱼）表情，文件名即键名（`开心.jpg` → `[表情:开心]`），可另写 `index.json` 的 `aliases`；只在聊天里触发，正经汇报/报错时不发。素材来自 [fisharchive.cc](https://fisharchive.cc/)，CC BY-NC-SA 4.0，非商用，出处与署名见 `assets/stickers/index.json`。
-- **收表情**：对方发来的 QQ 小黄脸（`face`）、商城表情（`mface`）和动画表情（`image` + `sub_type=1`）都会转成 `[对方发来…]` 文本；带图的会落到 `inbox/` 供模型查看，只有表情不带字也会触发回复。
+- **表情**：`assets/stickers/` 内置 15 张 DeepSeek 鲸鱼娘（大肥鱼）表情，文件名即键名（`开心.jpg` → `[表情:开心]`），可另写 `index.json` 的 `aliases`；提示词会带上每张表情的语义说明，命中时支持去标点/唯一包含匹配。只在聊天里触发，正经汇报/报错时不发。素材来自 [fisharchive.cc](https://fisharchive.cc/)，CC BY-NC-SA 4.0，非商用，出处与署名见 `assets/stickers/index.json`。
+- **收表情**：对方发来的 QQ 小黄脸（`face`）、商城表情（`mface`）和动画表情（`image` + `sub_type=1`）都会转成 `[对方发来…]` 文本；小黄脸名优先读 NapCat 的 `face_config.json`（280+ 个，缺表时回退内置常用表）。带图的会落到 `inbox/`，按表情专用提示词生成 `[表情含义] ...`，并按哈希缓存；只有表情不带字也会触发回复。
 - **语音回复**：`/voice 你好呀` 用 edge-tts 生成中文语音，转成腾讯 SILK 后以 `record` 发回；代理、音色、语速都在 `config.yaml` 的 `tts` 段。
 - **戳一戳**：收到 `notice/notify/poke` 后 35% 概率直接回戳对方，其余情况从 `POKE_REPLIES` 随机回一句。同一会话连回 3 次后冷却 5 秒。群里会先 @ 戳的人，不进模型会话。
 
@@ -227,12 +236,32 @@ python -m app.cli "/do 检查 ME_API_KEY 是否为空"
 ```bash
 python tests/smoke.py         # 28 项：store/persona/render/permission/router
 python tests/qq_e2e.py        # OneBot 渠道（mock 服务端）
+python tests/character_test.py  # 角色卡 JSON/PNG/世界书/变量替换
+python tests/e2e_http.py      # HTTP 端到端（Web 渠道）
 python tests/proactive_test.py  # 提醒解析/投递/中断跟进
 python tests/memory_test.py    # 摘要/画像/反馈规则（真调模型）
 python tests/tts_test.py       # /voice 指令（不真调 edge-tts）
 python tests/acp_e2e.py      # ACP 适配器 + mock agent
 python tests/router_acp.py   # /do -> 工具调用 -> 审批 -> 继续
 ```
+
+### 真机验收（2026-11-05）
+
+环境：Windows 本机 + NapCat 容器（`napcat`，QQ `1450236275`），服务 `127.0.0.1:8010`。
+
+| 项目 | 结果 | 依据 |
+|---|---|---|
+| 服务健康 / 渠道加载 | 通过 | `/healthz` 返回 `chat=openai`、`worker/worker_lite=acp`、渠道 `qq_onebot,web` |
+| QQ 登录与 WS 连接 | 通过 | 日志：`onebot 已连接`、`登录账号：1450236275` |
+| 私聊收发 | 通过 | 17:40–18:31 多轮消息正常往返 |
+| 入站图片 + OCR | 通过 | 图片落 `inbox/` 后由 `read_image` 打开并回述内容 |
+| 表情发送 | 通过 | 回复后追加 `[图片]` 表情素材 |
+| 语音回复 | 通过 | `/voice` 生成后以 `[语音 4s]` 发出 |
+| 戳一戳 | 通过 | 17:46/17:47 收到戳后随机回话 |
+| 中断任务跟进 | 通过 | 17:57 补发两条被中断任务说明 |
+| 掉线重连 / 自动重启 | 部分通过 | 自动重启有效；需短信验证时仍需人工过 WebUI |
+| 群聊 @ 触发 | 未真机验收 | 仅 `tests/qq_e2e.py` mock 覆盖 |
+| 小黑盒 / B站直播 | 未做 | 渠道开关默认 `false` |
 
 ## 目录
 
@@ -249,6 +278,9 @@ app/router.py      白名单/节流/指令/选后端/首响/审批
 app/pump.py        Push 渠道事件泵
 app/stt.py         语音转写（SILK → 文本）
 app/stickers.py    表情标记解析与素材索引
+app/vision.py      视觉描述（图片 / 表情 / 动图）
+app/docs.py        文档文本抽取（pdf/docx/xlsx/pptx）
+app/synth.py       表情文字合成（本地 PIL）
 app/proactive.py   定时提醒与中断任务跟进
 app/embed.py       本地中文向量（记忆召回）
 app/ocr.py         本地图片文字识别（RapidOCR）

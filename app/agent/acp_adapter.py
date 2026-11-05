@@ -67,7 +67,7 @@ class AcpAdapter:
         self._sessions: dict[str, str] = {}
         self._fresh: set[str] = set()      # 新建的会话，首轮注入人格与长期记忆
         self._meta: dict[str, dict] = {}   # session_id -> 渠道上下文，用于权限判定
-        self._queue: asyncio.Queue | None = None
+        self._queues: dict[str, asyncio.Queue] = {}
         self._pending_perm: dict[str, tuple[asyncio.Future, str | None]] = {}
 
     @staticmethod
@@ -183,17 +183,35 @@ class AcpAdapter:
                 for item in attachments
                 if item.get("kind") == "image" and item.get("path")
             ]
-            if paths:
+            doc_paths = [
+                str(item["path"])
+                for item in attachments
+                if item.get("kind") == "document" and item.get("path")
+            ]
+            text_paths = [
+                str(item["text_path"])
+                for item in attachments
+                if item.get("kind") == "document" and item.get("text_path")
+            ]
+            if paths or doc_paths:
+                parts = []
+                if paths:
+                    parts.append("图片已存在本地：" + "、".join(paths))
+                if doc_paths:
+                    parts.append("文件已存在本地：" + "、".join(doc_paths))
+                if text_paths:
+                    parts.append("文件抽取文本：" + "、".join(text_paths))
                 payload = (
-                    "（用户发来了图片，已经存在本地：" + "、".join(paths)
-                    + "。需要时用 read 工具打开看一眼）\n\n" + payload
+                    "（用户发来了附件，" + "；".join(parts) + "。需要时用 read 工具打开）\n\n"
+                    + payload
                 )
 
-        self._queue = asyncio.Queue()
-        task = asyncio.create_task(self._run_prompt(session_id, payload))
+        queue: asyncio.Queue = asyncio.Queue()
+        self._queues[session_id] = queue
+        task = asyncio.create_task(self._run_prompt(session_id, payload, queue))
         try:
             while True:
-                getter = asyncio.create_task(self._queue.get())
+                getter = asyncio.create_task(queue.get())
                 done, _ = await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
                 if getter in done:
                     item = getter.result()
@@ -202,8 +220,8 @@ class AcpAdapter:
                     yield item
                     continue
                 getter.cancel()
-                while not self._queue.empty():
-                    item = self._queue.get_nowait()
+                while not queue.empty():
+                    item = queue.get_nowait()
                     if item is None:
                         break
                     yield item
@@ -216,27 +234,27 @@ class AcpAdapter:
         finally:
             if not task.done():
                 task.cancel()
-            self._queue = None
+            if self._queues.get(session_id) is queue:
+                self._queues.pop(session_id, None)
         yield AgentEvent("done")
 
-    async def _run_prompt(self, session_id: str, text: str) -> None:
+    async def _run_prompt(self, session_id: str, text: str, queue: asyncio.Queue) -> None:
         try:
             await self._conn.prompt(session_id, [TextContentBlock(type="text", text=text)])
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.warning("ACP prompt 失败：%s", exc)
-            if self._queue is not None:
-                self._queue.put_nowait(AgentEvent("error", text=f"agent 出错：{exc}"))
+            queue.put_nowait(AgentEvent("error", text=f"agent 出错：{exc}"))
         finally:
-            if self._queue is not None:
-                self._queue.put_nowait(None)
+            queue.put_nowait(None)
 
     # ---------- 事件映射 ----------
 
-    def _emit(self, event: AgentEvent) -> None:
-        if self._queue is not None:
-            self._queue.put_nowait(event)
+    def _emit(self, session_id: str, event: AgentEvent) -> None:
+        queue = self._queues.get(session_id)
+        if queue is not None:
+            queue.put_nowait(event)
 
     def _on_update(self, session_id: str, update) -> None:
         kind = getattr(update, "session_update", None)
@@ -245,7 +263,7 @@ class AcpAdapter:
             content = getattr(update, "content", None)
             text = getattr(content, "text", None)
             if text:
-                self._emit(AgentEvent("text_delta", text=text))
+                self._emit(session_id, AgentEvent("text_delta", text=text))
             return
 
         if kind == "agent_thought_chunk":
@@ -253,6 +271,7 @@ class AcpAdapter:
 
         if kind == "tool_call":
             self._emit(
+                session_id,
                 AgentEvent(
                     "tool_call",
                     data={
@@ -267,11 +286,11 @@ class AcpAdapter:
         if kind == "tool_call_update":
             status = getattr(update, "status", "") or ""
             if status in ("failed", "error"):
-                self._emit(AgentEvent("progress", text="这步没成。"))
+                self._emit(session_id, AgentEvent("progress", text="这步没成。"))
             return
 
         if kind == "plan":
-            self._emit(AgentEvent("progress", text="想一下怎么做。"))
+            self._emit(session_id, AgentEvent("progress", text="想一下怎么做。"))
 
     async def _on_permission(self, session_id: str, tool_call, options) -> RequestPermissionResponse:
         allow_id = None
@@ -314,6 +333,7 @@ class AcpAdapter:
 
         flagged = "（高危）" if decision.reason.startswith("高危") else ""
         self._emit(
+            session_id,
             AgentEvent(
                 "permission",
                 req_id=req_id,
