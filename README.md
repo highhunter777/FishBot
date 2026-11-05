@@ -74,7 +74,7 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 | Web 聊天页（流式 + 打字节奏） | 完成 |
 | QQ 小号（NapCat OneBot 11，@ 触发、去重、重连） | 完成（待真机联调） |
 | 图片收发（落到 agent 工作目录的 `inbox/`） | 完成 |
-| 表情包（模型输出 `[表情:键名]`，需自备素材） | 完成 |
+| 表情包（内置 15 张 DeepSeek 鲸鱼娘，`[表情:键名]` 触发） | 完成 |
 | 语音消息（SILK/AMR → 本地 whisper 转写） | 完成 |
 | ACP 本地 agent（`/do`，权限审批 y/n） | 完成 |
 | OpenAI 兼容后端 + 无 key 降级 | 完成 |
@@ -87,7 +87,7 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 ## 语音与表情
 
 - **语音**：QQ 语音先落到工作目录的 `inbox/`，`pilk` 解 SILK 后由本地 `faster-whisper` 转写，文本以 `[语音] ...` 进会话；模型默认放 `models/whisper-small`（已在 `.gitignore`）。没装依赖或模型缺失时自动降级为只标记 `[语音]`。
-- **表情**：素材放 `assets/stickers/`，文件名即键名（`无语.png` → `[表情:无语]`），可另写 `index.json` 的 `aliases`；只在聊天里触发，正经汇报/报错时不发。
+- **表情**：`assets/stickers/` 内置 15 张 DeepSeek 鲸鱼娘（大肥鱼）表情，文件名即键名（`开心.jpg` → `[表情:开心]`），可另写 `index.json` 的 `aliases`；只在聊天里触发，正经汇报/报错时不发。素材来自 [fisharchive.cc](https://fisharchive.cc/)，CC BY-NC-SA 4.0，非商用，出处与署名见 `assets/stickers/index.json`。
 
 ## 服务守护
 

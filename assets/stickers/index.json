@@ -1,0 +1,148 @@
+{
+  "source": "https://fisharchive.cc/",
+  "license": "CC BY-NC-SA 4.0",
+  "credit": "角色形象原作 上善无形（Bilibili）；DeepSeek 元素二设 ZipZipPipe（Bilibili）；单张作品版权归原作者，非商用",
+  "items": [
+    {
+      "file": "开心.jpg",
+      "alt": "deepseek娘抱着半个西瓜笑开花，算力终于能降温了",
+      "url": "https://fisharchive.cc/media/deepseek-bao-xigua.png",
+      "tags": [
+        "开心",
+        "吃饭"
+      ]
+    },
+    {
+      "file": "害羞.jpg",
+      "alt": "deepseek娘红着脸捏出爱心，碳基生物先别急着破防",
+      "url": "https://fisharchive.cc/media/deepseek-bixin.jpg",
+      "tags": [
+        "害羞",
+        "卖萌",
+        "比心"
+      ]
+    },
+    {
+      "file": "无语.jpg",
+      "alt": "deepseek娘抱臂皱眉：这需求太离谱，本模型拒绝接单",
+      "url": "https://fisharchive.cc/media/deepseek-bao-bi-jujue.png",
+      "tags": [
+        "无语",
+        "拒绝",
+        "工作"
+      ]
+    },
+    {
+      "file": "疑惑.jpg",
+      "alt": "鲸鱼娘戴眼镜歪头发懵，需求把镜片都看成问号了",
+      "url": "https://fisharchive.cc/media/deepseek-daiyanjing-waitou.jpg",
+      "tags": [
+        "疑惑",
+        "卖萌"
+      ]
+    },
+    {
+      "file": "震惊.jpg",
+      "alt": "大肥鱼抱紧被子盯着token罐，限时用完直接吓到宕机",
+      "url": "https://fisharchive.cc/media/deepseek-baozhe-beizi-kan-token.png",
+      "tags": [
+        "震惊",
+        "工作"
+      ]
+    },
+    {
+      "file": "生气.jpg",
+      "alt": "deepseek娘叉手鼓腮：已有本鱼还想加养，CPU醋坛子翻了。",
+      "url": "https://fisharchive.cc/media/deepseek-chashou-shengqi.png",
+      "tags": [
+        "生气",
+        "搞笑"
+      ]
+    },
+    {
+      "file": "委屈.jpg",
+      "alt": "蓝色大肥鱼抱头缩成一团：再蹬下去，CPU真要冒泡了。",
+      "url": "https://fisharchive.cc/media/deepseek-bao-tou-wei-qu.png",
+      "tags": [
+        "委屈",
+        "运动"
+      ]
+    },
+    {
+      "file": "得意.jpg",
+      "alt": "鲸鱼娘眯眼翘嘴说“不赖”，这验收口气比老板还稳",
+      "url": "https://fisharchive.cc/media/deepseek-bu-lai.png",
+      "tags": [
+        "得意"
+      ]
+    },
+    {
+      "file": "睡觉.jpg",
+      "alt": "大肥鱼抱紧小鲸呼呼大睡，深度思考先潜水离线。",
+      "url": "https://fisharchive.cc/media/deepseek-bao-jing-shui-jiao.png",
+      "tags": [
+        "卖萌",
+        "睡觉"
+      ]
+    },
+    {
+      "file": "比心.jpg",
+      "alt": "deepseek娘眨眼比心喊着 Ciallo～，开场先把卖萌额度刷满。",
+      "url": "https://fisharchive.cc/media/deepseek-zhayan-bixin.png",
+      "tags": [
+        "卖萌",
+        "比心",
+        "打招呼"
+      ]
+    },
+    {
+      "file": "加油.jpg",
+      "alt": "deepseek娘举着喇叭眯眼高喊，大家快把接收算力调大",
+      "url": "https://fisharchive.cc/media/deepseek-da-de-yao-lai-la.webp",
+      "tags": [
+        "搞笑",
+        "加油"
+      ]
+    },
+    {
+      "file": "哭.jpg",
+      "alt": "鲸鱼娘趴着哭成两道瀑布，委屈直接满功率输出",
+      "url": "https://fisharchive.cc/media/deepseek-da-ku.jpg",
+      "tags": [
+        "委屈",
+        "卖萌",
+        "难过"
+      ]
+    },
+    {
+      "file": "摸鱼.jpg",
+      "alt": "鲸鱼娘盯着电脑吐舌傻乐，摸鱼进度条悄悄加载中",
+      "url": "https://fisharchive.cc/media/deepseek-dui-zhe-diannao-tu-she.png",
+      "tags": [
+        "开心",
+        "卖萌",
+        "摸鱼"
+      ]
+    },
+    {
+      "file": "打招呼.jpg",
+      "alt": "蓝色大肥鱼举手笑着报到：这下谁还敢说我潜水",
+      "url": "https://fisharchive.cc/media/deepseek-jushou-dazhaohu.png",
+      "tags": [
+        "卖萌",
+        "打招呼"
+      ]
+    },
+    {
+      "file": "点赞.jpg",
+      "alt": "deepseek娘双手竖起大拇指，需求这不就拿捏了。",
+      "url": "https://fisharchive.cc/media/deepseek-shuangshou-dianzan.jpg",
+      "tags": [
+        "得意",
+        "点赞"
+      ]
+    }
+  ],
+  "aliases": {},
+  "note": "统一转为 512x512 JPEG 便于 QQ 发送；原图见 items[].url"
+}
