@@ -85,6 +85,25 @@ CREATE TABLE IF NOT EXISTS agent_session (
     updated_at  INTEGER NOT NULL,
     PRIMARY KEY (agent, session_key)
 );
+
+CREATE TABLE IF NOT EXISTS media (
+    hash       TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    mime       TEXT NOT NULL DEFAULT '',
+    ocr        TEXT NOT NULL DEFAULT '',
+    caption    TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_expires ON media(expires_at);
+
+CREATE TABLE IF NOT EXISTS media_source (
+    source_key TEXT PRIMARY KEY,
+    hash       TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_source_hash ON media_source(hash);
 """
 
 
@@ -320,6 +339,73 @@ class Store:
         with self._connect() as conn:
             conn.execute(
                 "DELETE FROM agent_session WHERE agent=? AND session_key=?", (agent, session_key)
+            )
+
+    # ---------- media（按内容哈希缓存 OCR/视觉描述，TTL 过期清理） ----------
+
+    def media_get(self, digest: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT kind, path, mime, ocr, caption, created_at, expires_at "
+                "FROM media WHERE hash=?",
+                (digest,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def media_put(
+        self,
+        digest: str,
+        kind: str,
+        path: str,
+        *,
+        mime: str = "",
+        ocr: str = "",
+        caption: str = "",
+        ttl_s: float = 7 * 86400,
+    ) -> None:
+        """写入/更新媒体元数据；空的 OCR/caption 不覆盖已有内容，便于失败后重试。"""
+        now = int(time.time())
+        with self._connect() as conn:
+            conn.execute("DELETE FROM media WHERE expires_at<?", (now,))
+            conn.execute("DELETE FROM media_source WHERE hash NOT IN (SELECT hash FROM media)")
+            conn.execute(
+                "INSERT INTO media(hash, kind, path, mime, ocr, caption, created_at, expires_at) "
+                "VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(hash) DO UPDATE SET "
+                "kind=excluded.kind, path=excluded.path, mime=excluded.mime, "
+                "ocr=CASE WHEN excluded.ocr<>'' THEN excluded.ocr ELSE media.ocr END, "
+                "caption=CASE WHEN excluded.caption<>'' THEN excluded.caption ELSE media.caption END, "
+                "created_at=excluded.created_at, expires_at=excluded.expires_at",
+                (digest, kind, path, mime, ocr, caption, now, now + int(ttl_s)),
+            )
+
+    def media_prune(self, now: int | None = None) -> int:
+        """删掉过期的元数据行；返回删除数量。"""
+        cutoff = int(time.time()) if now is None else now
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM media WHERE expires_at<?", (cutoff,))
+            conn.execute("DELETE FROM media_source WHERE hash NOT IN (SELECT hash FROM media)")
+            return int(cur.rowcount or 0)
+
+    def media_source_get(self, source_key: str) -> dict | None:
+        """按 QQ 侧的文件标识找已缓存的媒体，命中就不用再下载。"""
+        now = int(time.time())
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT m.hash, m.kind, m.path, m.mime, m.ocr, m.caption, m.expires_at "
+                "FROM media_source s JOIN media m ON m.hash=s.hash "
+                "WHERE s.source_key=? AND m.expires_at>=?",
+                (source_key, now),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def media_source_put(self, source_key: str, digest: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO media_source(source_key, hash, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(source_key) DO UPDATE SET "
+                "hash=excluded.hash, updated_at=excluded.updated_at",
+                (source_key, digest, int(time.time())),
             )
 
     # ---------- task ----------

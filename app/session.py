@@ -147,9 +147,15 @@ class SessionService:
         )
         media = self._recent_media(ev)
         if media and not has_current_image:
+            lines = []
+            for item in media:
+                note = str(item.get("caption") or "")
+                ocr = str(item.get("ocr") or "").replace("\n", " ")[:80]
+                detail = note or (f"文字：{ocr}" if ocr else "")
+                lines.append(f"- {item['path']}" + (f"（{detail}）" if detail else ""))
             extras.append(
                 "最近发来的图片（用户说“刚才那张/这个”时可以直接 read 打开）：\n"
-                + "\n".join(f"- {path}" for path in media)
+                + "\n".join(lines)
             )
 
         hint = stickers.prompt_hint()
@@ -181,28 +187,32 @@ class SessionService:
         return f"{ev.channel}:{ev.conv_id}"
 
     def _remember_media(self, ev: InboundEvent) -> None:
-        paths = [
-            str(item["path"])
+        items = [
+            {
+                "path": str(item["path"]),
+                "caption": str(item.get("caption") or ""),
+                "ocr": str(item.get("ocr") or ""),
+            }
             for item in ev.attachments
             if item.get("kind") == "image" and item.get("path")
         ]
-        if not paths:
+        if not items:
             return
         key = self._media_key(ev)
         now = time.monotonic()
         buf = [item for item in self._media_ctx.get(key, []) if now - item["ts"] <= MEDIA_CTX_TTL_S]
-        for path in paths:
-            if not any(item["path"] == path for item in buf):
-                buf.append({"path": path, "ts": now})
+        for item in items:
+            if not any(saved["path"] == item["path"] for saved in buf):
+                buf.append({**item, "ts": now})
         self._media_ctx[key] = buf[-MEDIA_CTX_LIMIT:]
 
-    def _recent_media(self, ev: InboundEvent) -> list[str]:
+    def _recent_media(self, ev: InboundEvent) -> list[dict]:
         key = self._media_key(ev)
         now = time.monotonic()
         buf = [item for item in self._media_ctx.get(key, []) if now - item["ts"] <= MEDIA_CTX_TTL_S]
         if buf:
             self._media_ctx[key] = buf
-        return [item["path"] for item in buf[-MEDIA_CTX_LIMIT:]]
+        return buf[-MEDIA_CTX_LIMIT:]
 
     def context(
         self, ev: InboundEvent, agent_cfg: AgentCfg, scope: str = "chat", guard: str = ""

@@ -16,3 +16,12 @@ sentence-transformers>=3.0
 # 图片 OCR / 语音回复（可选）：不装则跳过 OCR / /voice 报错
 rapidocr_onnxruntime>=1.2
 edge-tts>=7.0
+
+# 图片压缩与格式纠正（可选）：不装则原图直接送模型
+Pillow>=10.0
+
+# 文档理解（可选）：不装则文件只留路径，不抽取正文
+pypdf>=4.0
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=0.6

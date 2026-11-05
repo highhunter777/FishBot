@@ -96,6 +96,26 @@ class OcrCfg:
 
 
 @dataclass(slots=True)
+class MediaCfg:
+    caption: bool = True             # 入站图片用视觉模型生成一句描述
+    compress: bool = True            # 送模型前压到长边 max_side 的 JPEG
+    max_side: int = 1024
+    jpeg_quality: int = 85
+    ttl_days: float = 7.0            # 媒体元数据（OCR/描述）保留多久
+    caption_agent: str = "chat"      # 用哪个 agent 的 OpenAI 兼容接口做视觉描述
+    caption_max_chars: int = 160
+    caption_timeout_s: float = 45.0
+    doc_enabled: bool = True         # QQ 文件消息：下载后抽取正文
+    doc_max_bytes: int = 20 * 1024 * 1024
+    doc_extract_chars: int = 20000   # 抽取上限（完整文本另存 .txt）
+    doc_prompt_chars: int = 3000     # 进会话的预览长度
+    doc_max_pages: int = 30          # PDF/表格最多看多少页/行
+    synth_enabled: bool = True       # /表情：本地合成文字贴纸
+    synth_max_chars: int = 24
+    synth_size: int = 512
+
+
+@dataclass(slots=True)
 class ProactiveCfg:
     enabled: bool = True
     poll_s: float = 20.0              # 多久查一次到期提醒
@@ -128,6 +148,7 @@ class Config:
     stt: SttCfg = field(default_factory=SttCfg)
     tts: TtsCfg = field(default_factory=TtsCfg)
     ocr: OcrCfg = field(default_factory=OcrCfg)
+    media: MediaCfg = field(default_factory=MediaCfg)
     proactive: ProactiveCfg = field(default_factory=ProactiveCfg)
 
     def agent_for(self, *, channel: str, is_private: bool, text: str) -> str:
@@ -185,6 +206,7 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
     stt = SttCfg(**dict(raw.get("stt") or {}))
     tts = TtsCfg(**dict(raw.get("tts") or {}))
     ocr = OcrCfg(**dict(raw.get("ocr") or {}))
+    media = MediaCfg(**dict(raw.get("media") or {}))
     proactive = ProactiveCfg(**dict(raw.get("proactive") or {}))
 
     return Config(
@@ -202,5 +224,6 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
         stt=stt,
         tts=tts,
         ocr=ocr,
+        media=media,
         proactive=proactive,
     )

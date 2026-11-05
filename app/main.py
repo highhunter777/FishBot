@@ -17,7 +17,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from . import ocr as ocr_mod
-from . import stt
+from . import stt, vision
 from .agent.factory import build_agent
 from .alert import notify
 from .approval import ApprovalGate
@@ -28,6 +28,7 @@ from .credentials import inject_dsh_refs
 from .deps import Deps
 from .domain import Caps
 from .memory import MemoryService
+from .media_cleanup import prune_media_files
 from .proactive import Proactive
 from .pump import pump_channel
 from .router import Router
@@ -39,7 +40,7 @@ from .watchdog import Watchdog, restart_container
 log = logging.getLogger(__name__)
 
 
-def _build_qq(cfg: Config) -> OneBotChannel | None:
+def _build_qq(cfg: Config, store: Store) -> OneBotChannel | None:
     qq = cfg.channels.get("qq") or {}
     if not qq.get("enabled"):
         return None
@@ -69,6 +70,9 @@ def _build_qq(cfg: Config) -> OneBotChannel | None:
         media_root=cfg.agents["worker"].cwd if "worker" in cfg.agents else "",
         transcriber=transcriber,
         ocr=(lambda path: ocr_mod.image_text(path, cfg)) if cfg.ocr.enabled else None,
+        media_store=store,
+        captioner=vision.Captioner(cfg) if cfg.media.caption else None,
+        media_cfg=cfg.media,
     )
 
 
@@ -86,6 +90,14 @@ async def lifespan(app: FastAPI):
 
     store = Store(cfg.db_path)
     store.init()
+    store.media_prune()
+    try:
+        media_root = cfg.agents["worker"].cwd if "worker" in cfg.agents else ""
+        removed_files = prune_media_files(media_root, cfg.media.ttl_days)
+        if removed_files:
+            log.info("清理旧媒体文件：%d 个", removed_files)
+    except Exception:
+        log.exception("清理旧媒体文件失败")
 
     agents = {name: build_agent(agent_cfg) for name, agent_cfg in cfg.agents.items()}
     memory = MemoryService(cfg) if cfg.memory.enabled else None
@@ -102,7 +114,7 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(sessions.backfill_vectors(), name="memory-index"))
 
     channels: dict[str, object] = {}
-    qq = _build_qq(cfg)
+    qq = _build_qq(cfg, store)
     if qq is not None:
         caps[qq.name] = qq.caps
         channels[qq.name] = qq

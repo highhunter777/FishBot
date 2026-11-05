@@ -136,6 +136,27 @@ ocr:
   min_score: 0.6
   max_chars: 1200
 
+# 媒体处理：压缩后送视觉模型，OCR/描述按内容哈希缓存（TTL 到期自动清理）
+media:
+  caption: true             # 入站图片生成一句中文描述；接口不支持图片时自动停用
+  compress: true            # 长边压到 max_side 的 JPEG，减少视觉 token
+  max_side: 1024
+  jpeg_quality: 85
+  ttl_days: 7               # media 表里的 OCR/描述保留天数
+  caption_agent: chat       # 用哪个 agent 的 OpenAI 兼容接口做描述
+  caption_max_chars: 160
+  caption_timeout_s: 45
+  # QQ 文件消息：下载后按后缀抽取正文（pdf/docx/xlsx/pptx/txt/csv/md/json…）
+  doc_enabled: true
+  doc_max_bytes: 20971520   # 20 MB
+  doc_extract_chars: 20000  # 抽取上限，完整文本另存为 <文件>.txt
+  doc_prompt_chars: 3000    # 进会话的预览长度，超出部分交给 agent 读 txt
+  doc_max_pages: 30         # PDF 页数 / 表格行数上限
+  # /表情 文字贴纸：本地 PIL 合成，不调模型
+  synth_enabled: true
+  synth_max_chars: 24
+  synth_size: 512
+
 # 主动能力：定时提醒、启动时跟进被中断的任务
 proactive:
   enabled: true
