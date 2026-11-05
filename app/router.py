@@ -8,7 +8,7 @@ import time
 from dataclasses import replace
 from typing import AsyncIterator
 
-from . import persona, stickers
+from . import persona, stickers, synth
 from .agent.port import AgentPort
 from .approval import ApprovalGate, parse_answer
 from .config import Config
@@ -193,6 +193,29 @@ class Router:
                 yield OutboundAction("text", words["voice_fail"], delay=0.2)
                 return
             yield OutboundAction("voice", media=path, delay=0.2)
+            return
+
+        if cmd in ("/表情", "/贴纸", "/meme", "/合成"):
+            if not rest:
+                yield OutboundAction("text", words["synth_usage"], delay=0.2)
+                return
+            if not self.cfg.media.synth_enabled:
+                yield OutboundAction("text", words["no_agent"], delay=0.2)
+                return
+            key, sep, body = rest.partition(" ")
+            template = stickers.resolve(key) if sep and body.strip() else None
+            text = body.strip() if template is not None else rest
+            path = await asyncio.to_thread(
+                synth.render,
+                text,
+                template,
+                max_chars=self.cfg.media.synth_max_chars,
+                size=self.cfg.media.synth_size,
+            )
+            if not path:
+                yield OutboundAction("text", words["synth_fail"], delay=0.2)
+                return
+            yield OutboundAction("image", media=path, delay=0.3)
             return
 
         if cmd in ("/rules", "/反馈", "/规矩"):

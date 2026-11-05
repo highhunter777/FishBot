@@ -42,7 +42,8 @@ OWNER_LINES = {
         "看我记了啥——/profile\n"
         "看我学到的规矩——/rules\n"
         "想被提醒——/remind 10m 喝水\n"
-        "想听语音——/voice 你好呀"
+        "想听语音——/voice 你好呀\n"
+        "想发表情图——/表情 好耶，或 /表情 开心 好耶"
     ),
     "denied": "这个得主人来喵。",
     "unknown_cmd": "没这个指令喵，/help 看看？",
@@ -66,6 +67,8 @@ OWNER_LINES = {
     "no_rules": "还没学到什么规矩喵。",
     "voice_usage": "要说什么呀？格式：/voice 你好呀",
     "voice_fail": "语音没生成出来喵，等下再试试。",
+    "synth_usage": "想写什么喵？格式：/表情 好耶，或 /表情 开心 好耶（用已有表情做底图）",
+    "synth_fail": "这张没合出来喵，换个短点的文字试试。",
     "remind_cancel": "删掉了喵。",
     "remind_cancel_fail": "没找到这条提醒喵。",
 }

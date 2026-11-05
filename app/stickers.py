@@ -45,6 +45,9 @@ NOTES = {
     "期待": "眼巴巴等回应",
     "喵": "撒娇、强调女仆身份",
     "呆毛": "发呆、冒呆毛",
+    "打招呼": "见面、响应对方",
+    "摸鱼": "偷懒、闲聊",
+    "点赞": "认可、赞同",
 }
 
 
@@ -87,6 +90,15 @@ def resolve(name: str) -> Path | None:
     alias = _aliases().get(key)
     if alias and alias in items:
         return items[alias]
+    # 容错：去掉空格/标点后仍能匹配，或只命中唯一一个包含关系
+    norm = re.sub(r"[\s:：_，。！？、!?\-]+", "", key).lower()
+    if norm:
+        for candidate in items:
+            if re.sub(r"[\s:：_，。！？、!?\-]+", "", candidate).lower() == norm:
+                return items[candidate]
+        hits = [candidate for candidate in items if norm in candidate.lower()]
+        if len(hits) == 1:
+            return items[hits[0]]
     return None
 
 
@@ -108,13 +120,16 @@ def extract(text: str) -> tuple[str, list[str]]:
 
 
 def prompt_hint() -> str:
-    """给模型看的可用表情清单；没有素材时返回空串。"""
+    """给模型看的可用表情清单（带语义），没有素材时返回空串。"""
     items = available()
     if not items:
         return ""
-    listing = "、".join(sorted(items))
+    parts = []
+    for key in sorted(items):
+        note = NOTES.get(key)
+        parts.append(f"{key}（{note}）" if note else key)
     return (
         "【表情】想表达情绪时可以单独写一行 `[表情:键名]`，系统会替你发一张图。\n"
-        f"可用：{listing}\n"
+        f"可用：{'、'.join(parts)}\n"
         "规则：一次最多一条；正经汇报、报错、给步骤时不要发；别每句都发。"
     )
