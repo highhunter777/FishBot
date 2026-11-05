@@ -93,9 +93,63 @@ async def test_end_to_end() -> None:
     check("含称呼", any("王" in str(v) for v in profile.values()), str(profile))
 
 
+def test_profile_merge() -> None:
+    print("画像键合并")
+    tmp = pathlib.Path(tempfile.mkdtemp()) / "merge.db"
+    store = Store(tmp)
+    store.init()
+    store.merge_profile("u1", {"称呼": "老王"})
+    store.merge_profile("u1", {"称呼 ": "老李"})
+    profile = store.profile("u1")
+    check("同义键不重复", list(profile) == ["称呼"], str(profile))
+    check("新值覆盖旧值", profile.get("称呼") == "老李", str(profile))
+
+
+def test_feedback_store() -> None:
+    print("反馈规则")
+    tmp = pathlib.Path(tempfile.mkdtemp()) / "fb.db"
+    store = Store(tmp)
+    store.init()
+    check("写入规则", store.add_feedback("u1", "别用列表，直接说结论", "fb"))
+    check("重复规则不重复写", not store.add_feedback("u1", "别用列表，直接说结论", "fb"))
+    rules = store.feedback_rules("u1", "fb")
+    check("能读回规则", rules == ["别用列表，直接说结论"], str(rules))
+
+    cfg = load_config()
+    sessions = SessionService(store, cfg)
+    ev = InboundEvent(channel="cli", conv_id="c1", user_id="u1", text="在吗", is_private=True)
+    prompt = sessions.system_prompt(ev, cfg.agents["chat"], scope="fb")
+    check("规则进了提示词", "别用列表" in prompt, prompt[-200:])
+
+
+def test_media_context() -> None:
+    print("最近图片上下文")
+    tmp = pathlib.Path(tempfile.mkdtemp()) / "media.db"
+    store = Store(tmp)
+    store.init()
+    cfg = load_config()
+    sessions = SessionService(store, cfg)
+
+    ev1 = InboundEvent(
+        channel="cli",
+        conv_id="c1",
+        user_id="u1",
+        text="看这张图",
+        attachments=[{"kind": "image", "path": r"C:\tmp\shot.jpg"}],
+    )
+    sessions.context(ev1, cfg.agents["chat"], scope="media")
+
+    ev2 = InboundEvent(channel="cli", conv_id="c1", user_id="u1", text="刚才那张图里是什么")
+    messages = sessions.context(ev2, cfg.agents["chat"], scope="media")
+    check("图片路径进了后续提示词", "shot.jpg" in messages[0]["content"], messages[0]["content"][-300:])
+
+
 def main() -> None:
     test_parse_json()
     test_degrade()
+    test_profile_merge()
+    test_feedback_store()
+    test_media_context()
     asyncio.run(test_end_to_end())
     print(f"\n全部通过：{PASS} 项")
 

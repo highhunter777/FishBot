@@ -31,6 +31,19 @@ SUMMARIZE_PROMPT = """把下面的对话压缩成事实记录，300 字以内，
 {dialogue}
 """
 
+FEEDBACK_PROMPT = """判断用户这句话是不是在纠正、约束或反馈助手的行为。
+
+如果是，只输出一条以后可以照做的规则，80 字以内，用第三人称陈述，不要引号、不要解释。
+如果不是，只输出空字符串。
+
+已有规则：
+{rules}
+
+助手上一次回复：{reply}
+用户这次说：{user}
+"""
+
+
 EXTRACT_PROMPT = """从这轮对话里，提取关于「用户本人」的稳定信息。
 
 只提取长期有效的：称呼/姓名、身份职业、长期偏好、正在做的项目、明确说过的规矩。
@@ -126,6 +139,28 @@ class MemoryService:
             return None
         text = re.sub(r"^\s*(摘要[:：])?\s*", "", text).strip()
         return text[:SUMMARY_MAX]
+
+    # ---------- 反馈学习 ----------
+
+    async def feedback(self, user_text: str, prev_reply: str, rules: list[str]) -> str | None:
+        """从纠正里提炼一条可执行规则；没有就返回 None。"""
+        if not self.ready or not (user_text or "").strip():
+            return None
+        text = await self._complete(
+            "你是一个反馈归纳器，只输出规则或空字符串。",
+            FEEDBACK_PROMPT.format(
+                rules="\n".join(f"- {r}" for r in rules) if rules else "（无）",
+                reply=(prev_reply or "（无）")[:500],
+                user=user_text[:500],
+            ),
+            max_tokens=160,
+        )
+        if not text:
+            return None
+        rule = text.strip().strip("\"'“”‘’").splitlines()[0].strip()
+        if not rule or rule in ("无", "没有", "空", "（无）"):
+            return None
+        return rule[:120]
 
     # ---------- 事实抽取 ----------
 

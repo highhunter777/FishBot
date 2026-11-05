@@ -9,3 +9,10 @@ faster-whisper>=1.2
 pilk>=0.2
 av>=12.0
 numpy>=1.24
+
+# 长期记忆向量（可选）：不装则召回自动退回字面匹配
+sentence-transformers>=3.0
+
+# 图片 OCR / 语音回复（可选）：不装则跳过 OCR / /voice 报错
+rapidocr_onnxruntime>=1.2
+edge-tts>=7.0

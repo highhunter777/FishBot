@@ -24,6 +24,15 @@ COMPACT_THRESHOLD = 40     # 超过这么多条就压缩
 COMPACT_KEEP = 20          # 保留最近多少条不动
 SUMMARY_LIMIT = 800
 
+MEDIA_CTX_TTL_S = 600      # 最近图片的有效期
+MEDIA_CTX_LIMIT = 3        # 每个会话留几张
+
+# 出现这些词才值得花一次模型调用去归纳反馈
+FEEDBACK_HINTS = (
+    "不是", "别", "不要", "以后", "记住", "语气", "格式", "太", "又",
+    "说了", "错了", "不喜欢", "换成", "重新",
+)
+
 CHAT_PROMPTS = {
     "private": "你是我自己的助手，说话像熟人，简短直接，不用客套话，不用列表。",
     "group": "你在群聊里，只在被叫到时说话，简短、有分寸，不抢戏，不刷屏。",
@@ -49,7 +58,8 @@ class SessionService:
         self._card_cache: dict[str, cards.CharacterCard | None] = {}
         self._tasks: set[asyncio.Task] = set()
         self._locks: dict[str, asyncio.Lock] = {}
-        self.recall = Recall(store) if cfg.memory.recall else None
+        self._media_ctx: dict[str, list[dict]] = {}
+        self.recall = Recall(store, cfg) if cfg.memory.recall else None
 
     # ---------- 角色卡 ----------
 
@@ -112,9 +122,35 @@ class SessionService:
         extras: list[str] = []
         profile = self.store.profile(ev.user_id, scope)
         if profile:
-            pairs = [f"{k}={str(v)[:60]}" for k, v in list(profile.items())[:8]]
+            pairs = [f"{k}={str(v)[:60]}" for k, v in list(profile.items())[:12]]
             extras.append("关于对方：" + "，".join(pairs))
+        if ev.is_private:
+            rules = self.store.feedback_rules(ev.user_id, scope)
+            if rules:
+                extras.append(
+                    "用户纠正过你，后续务必遵守：\n" + "\n".join(f"- {r}" for r in rules[:5])
+                )
         extras.append(f"现在时间：{time.strftime('%Y-%m-%d %H:%M %A')}")
+
+        recent = ev.raw.get("recent") if isinstance(ev.raw, dict) else None
+        if recent and not ev.is_private:
+            lines = [
+                f"{str(item.get('name') or '群友')[:20]}：{str(item.get('text') or '')[:100]}"
+                for item in recent[-12:]
+            ]
+            extras.append(
+                "群聊最近发言（只用来理解上下文，不要逐条回应）：\n" + "\n".join(lines)[:1200]
+            )
+
+        has_current_image = any(
+            item.get("kind") == "image" and item.get("path") for item in ev.attachments
+        )
+        media = self._recent_media(ev)
+        if media and not has_current_image:
+            extras.append(
+                "最近发来的图片（用户说“刚才那张/这个”时可以直接 read 打开）：\n"
+                + "\n".join(f"- {path}" for path in media)
+            )
 
         hint = stickers.prompt_hint()
         if hint:
@@ -141,9 +177,37 @@ class SessionService:
 
     # ---------- 上下文 ----------
 
+    def _media_key(self, ev: InboundEvent) -> str:
+        return f"{ev.channel}:{ev.conv_id}"
+
+    def _remember_media(self, ev: InboundEvent) -> None:
+        paths = [
+            str(item["path"])
+            for item in ev.attachments
+            if item.get("kind") == "image" and item.get("path")
+        ]
+        if not paths:
+            return
+        key = self._media_key(ev)
+        now = time.monotonic()
+        buf = [item for item in self._media_ctx.get(key, []) if now - item["ts"] <= MEDIA_CTX_TTL_S]
+        for path in paths:
+            if not any(item["path"] == path for item in buf):
+                buf.append({"path": path, "ts": now})
+        self._media_ctx[key] = buf[-MEDIA_CTX_LIMIT:]
+
+    def _recent_media(self, ev: InboundEvent) -> list[str]:
+        key = self._media_key(ev)
+        now = time.monotonic()
+        buf = [item for item in self._media_ctx.get(key, []) if now - item["ts"] <= MEDIA_CTX_TTL_S]
+        if buf:
+            self._media_ctx[key] = buf
+        return [item["path"] for item in buf[-MEDIA_CTX_LIMIT:]]
+
     def context(
         self, ev: InboundEvent, agent_cfg: AgentCfg, scope: str = "chat", guard: str = ""
     ) -> list[dict]:
+        self._remember_media(ev)
         messages = [{"role": "system", "content": self.system_prompt(ev, agent_cfg, scope, guard)}]
         summary = self.store.get_summary(ev.channel, ev.conv_id, scope)
         if summary:
@@ -175,27 +239,71 @@ class SessionService:
 
     # ---------- 记忆 ----------
 
+    def _spawn(self, coro) -> bool:
+        try:
+            task = asyncio.create_task(coro)
+        except RuntimeError:                     # 没有事件循环（例如同步脚本）
+            return False
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return True
+
     def remember(self, ev: InboundEvent, reply: str, scope: str = "chat") -> None:
-        self.store.add_message(ev.channel, ev.conv_id, ev.user_id, "user", ev.text, scope=scope)
+        prev_reply = self.store.last_assistant(ev.channel, ev.conv_id, scope)
+        user_mid = self.store.add_message(ev.channel, ev.conv_id, ev.user_id, "user", ev.text, scope=scope)
         self.store.add_message(ev.channel, ev.conv_id, ev.user_id, "assistant", reply, scope=scope)
+
+        if self.cfg.memory.embedding:
+            self._spawn(self._index([(user_mid, ev.text)]))
 
         if self.memory is None or not self.cfg.memory.enabled:
             self._compact(ev, scope)
             return
-        try:
-            task = asyncio.create_task(self._maintain(ev, reply, scope))
-        except RuntimeError:                     # 没有事件循环（例如同步脚本）
+        if not self._spawn(self._maintain(ev, reply, scope, prev_reply)):
             self._compact(ev, scope)
+
+    async def _index(self, rows: list[tuple[int, str]]) -> None:
+        rows = [(mid, text) for mid, text in rows if str(text or "").strip()]
+        if not rows:
             return
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        from . import embed
+
+        try:
+            vecs = await asyncio.to_thread(
+                embed.encode, [text for _, text in rows], self.cfg.memory.embedding_model
+            )
+            if vecs is None:
+                return
+            for (mid, _), vec in zip(rows, vecs):
+                self.store.set_message_vector(mid, vec.tobytes())
+        except Exception as exc:
+            log.warning("记忆：向量写入失败 %s", exc)
+
+    async def backfill_vectors(self, limit: int = 3000, batch: int = 32) -> None:
+        """启动时给旧消息补向量；没有存量就只预热模型。"""
+        if not self.cfg.memory.embedding:
+            return
+        rows = self.store.messages_without_vectors(limit)
+        if not rows:
+            from . import embed
+
+            try:
+                await asyncio.to_thread(embed.encode, ["预热"], self.cfg.memory.embedding_model)
+            except Exception:
+                pass
+            return
+        for i in range(0, len(rows), batch):
+            await self._index([(r["id"], r["content"]) for r in rows[i : i + batch]])
+        log.info("记忆：补算向量 %d 条", len(rows))
 
     async def flush(self) -> None:
         """等待后台的记忆维护跑完（测试与进程退出时用）。"""
         if self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
-    async def _maintain(self, ev: InboundEvent, reply: str, scope: str) -> None:
+    async def _maintain(
+        self, ev: InboundEvent, reply: str, scope: str, prev_reply: str = ""
+    ) -> None:
         key = f"{scope}|{ev.channel}|{ev.conv_id}"
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -208,6 +316,13 @@ class SessionService:
                 if facts:
                     self.store.merge_profile(ev.user_id, facts, scope)
                     log.info("记忆：抽取到 %s", facts)
+
+                # 只有像纠正/约束的话才额外花一次调用，避免每条消息都跑
+                if prev_reply and any(hint in ev.text for hint in FEEDBACK_HINTS):
+                    rules = self.store.feedback_rules(ev.user_id, scope)
+                    rule = await self.memory.feedback(ev.text, prev_reply, rules)
+                    if rule and self.store.add_feedback(ev.user_id, rule, scope):
+                        log.info("反馈：学到 %s", rule)
 
     async def _summarize(self, ev: InboundEvent, scope: str) -> None:
         if self.store.count_messages(ev.channel, ev.conv_id, scope) <= COMPACT_THRESHOLD:
