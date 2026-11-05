@@ -83,6 +83,9 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 | 语音消息（SILK/AMR → 本地 whisper 转写） | 完成 |
 | 戳一戳（连回 3 次后冷却 5 秒） | 完成 |
 | 主动提醒（`/remind`，跨重启保留） | 完成 |
+| 任务规划—执行—校验（`/plan`，多步任务自动触发） | 完成 |
+| 主动巡检（任务卡住 / 磁盘 / inbox，`/patrol`） | 完成 |
+| 梗库与斗图（`/梗`、`/斗图 开`，按群限流） | 完成 |
 | 群聊被动上下文（被 @ 时带上最近发言） | 完成 |
 | 长期记忆（本地向量召回 + 时效衰减 + 画像去重） | 完成 |
 | 反馈学习（纠正自动归纳为规则，`/rules` 查看） | 完成 |
@@ -105,6 +108,8 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 - **动图**：GIF/动图按时间均匀抽最多 6 帧拼成一张联系表，交给视觉模型概括动作或情绪，以 `[动图] N 帧` + `[动图描述] ...` 进会话；拼图按哈希缓存，同一张动图不会重复抽帧。
 - **文档**：QQ 文件消息（`file`）下载到 `inbox/日期/`，按后缀抽取正文：PDF 用 `pypdf`，DOCX 用 `python-docx`，XLSX 用 `openpyxl`，PPTX 用 `python-pptx`，纯文本直接读。预览（默认 3000 字）以 `[文件内容] ...` 进会话，完整文本另存为 `<文件>.txt` 供 agent 读取；单文件默认上限 20 MB，PDF 最多看 30 页。
 - **表情合成**：`/表情 好耶` 生成本地文字卡片；`/表情 开心 好耶` 用内置表情做底图并在底部加字。PIL 直接合成，不调模型，输出到 `data/generated/`。
+- **梗库**：`/梗 无语` 按键名、标签和说明匹配内置表情，直接把梗图发出来并带一句说明；`/梗` 无参数时列出全部键名。索引来自 `assets/stickers/index.json` 的 `tags`/`alt`。
+- **斗图**：群里 `/斗图 开` 后，该群发表情可以不 @ 小号；收到只有表情的消息会按语义匹配回一张，同一张 10 分钟内不重复，每群每小时有上限。设置落 `group_setting`，重启后保留。
 - **语音**：QQ 语音先落到工作目录的 `inbox/`，`pilk` 解 SILK 后由本地 `faster-whisper` 转写，文本以 `[语音] ...` 进会话；模型默认放 `models/whisper-small`（已在 `.gitignore`）。没装依赖或模型缺失时自动降级为只标记 `[语音]`。
 - **表情**：`assets/stickers/` 内置 15 张 DeepSeek 鲸鱼娘（大肥鱼）表情，文件名即键名（`开心.jpg` → `[表情:开心]`），可另写 `index.json` 的 `aliases`；提示词会带上每张表情的语义说明，命中时支持去标点/唯一包含匹配。只在聊天里触发，正经汇报/报错时不发。素材来自 [fisharchive.cc](https://fisharchive.cc/)，CC BY-NC-SA 4.0，非商用，出处与署名见 `assets/stickers/index.json`。
 - **收表情**：对方发来的 QQ 小黄脸（`face`）、商城表情（`mface`）和动画表情（`image` + `sub_type=1`）都会转成 `[对方发来…]` 文本；小黄脸名优先读 NapCat 的 `face_config.json`（280+ 个，缺表时回退内置常用表）。带图的会落到 `inbox/`，按表情专用提示词生成 `[表情含义] ...`，并按哈希缓存；只有表情不带字也会触发回复。
@@ -119,6 +124,8 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 - **群聊上下文**：每个群在内存里保留最近 20 条发言；被 @ 时把最近 12 条连同发言人注入提示词，只用于理解前文，不逐条回应。
 - **反馈学习**：私聊里出现纠正/约束语句（“别用列表”“以后都…”）时，用 chat 模型归纳成一条规则，写入 SQLite 并注入后续提示词；`/rules` 查看已学到的规则。
 - **静默工具进度**：QQ 等推送渠道不再发送“在弄 xx”，只在 web/cli 显示，减少刷屏和风控。
+- **任务规划**：`/plan 任务` 或 `/do` 里出现“然后/分别/整理/排查/修复/部署”等多步词时，先用轻量模型拆成 1–5 步，逐步交给 worker 执行，每步用校验器判断是否通过，失败重试一次，最后汇总；每个步骤的目标、验收标准、尝试次数、证据和时间都落 `task_step` 表。简单任务仍走原来的单轮，避免变慢。
+- **主动巡检**：每 10 分钟检查任务卡住、磁盘剩余空间、`inbox` 体积；命中阈值且不在静默时段才推送，同类通知有冷却。`/patrol` 可随时手动查看，不发通知。
 
 ## 服务守护
 
@@ -243,6 +250,10 @@ python tests/memory_test.py    # 摘要/画像/反馈规则（真调模型）
 python tests/tts_test.py       # /voice 指令（不真调 edge-tts）
 python tests/acp_e2e.py      # ACP 适配器 + mock agent
 python tests/router_acp.py   # /do -> 工具调用 -> 审批 -> 继续
+python tests/media_cleanup_test.py  # inbox 过期文件清理
+python tests/doutu_test.py   # 梗库检索、斗图开关、频率上限
+python tests/task_step_test.py  # 任务步骤状态/重试/中断留档
+python tests/eval/run.py     # 39 条真实评测：聊天/任务/记忆/主动/玩法/媒体
 ```
 
 ### 真机验收（2026-11-05）
@@ -281,7 +292,9 @@ app/stickers.py    表情标记解析与素材索引
 app/vision.py      视觉描述（图片 / 表情 / 动图）
 app/docs.py        文档文本抽取（pdf/docx/xlsx/pptx）
 app/synth.py       表情文字合成（本地 PIL）
-app/proactive.py   定时提醒与中断任务跟进
+app/proactive.py   定时提醒、中断跟进与主动巡检
+app/planner.py     任务拆解与逐步校验
+app/task_runner.py 多步任务执行（规划 → 执行 → 校验 → 重试）
 app/embed.py       本地中文向量（记忆召回）
 app/ocr.py         本地图片文字识别（RapidOCR）
 app/tts.py         语音合成（edge-tts → SILK）
