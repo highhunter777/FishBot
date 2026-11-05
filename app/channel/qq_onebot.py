@@ -11,6 +11,7 @@ import logging
 import time
 import uuid
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import replace
 from typing import AsyncIterator
 
@@ -39,13 +40,15 @@ class OneBotChannel:
         group_requires_at: bool = True,
         allowed_users: set[str] | None = None,
         media_root: str = "",
+        transcriber: Callable[[str], str] | None = None,
     ) -> None:
         self.ws_url = ws_url
         self.access_token = access_token
         self.self_id = str(self_id) if self_id else None
         self.group_requires_at = group_requires_at
         self.allowed_users = allowed_users or set()
-        self.media_root = media_root            # 图片/文件落到这里（通常是 agent 工作目录）
+        self.media_root = media_root            # 图片/语音落到这里（通常是 agent 工作目录）
+        self.transcriber = transcriber          # 语音转写：同步函数，放线程里跑
         self._ws = None
         self._inbox: asyncio.Queue | None = None
         self._write_lock = asyncio.Lock()
@@ -84,6 +87,8 @@ class OneBotChannel:
                         event = await self._inbox.get()
                         if event is _CLOSED:
                             break
+                        if event.attachments and self.media_root:
+                            event = await self._hydrate(event)      # 下载 + 语音转写
                         yield event
                     reader.cancel()
             except asyncio.CancelledError:
@@ -102,17 +107,42 @@ class OneBotChannel:
             backoff = min(backoff * 2, 120.0)
 
     async def _hydrate(self, event: InboundEvent) -> InboundEvent:
-        """把图片段从 url 落到本地，供 agent 直接 read。"""
+        """把图片段从 url 落到本地供 agent 直接 read；语音段落盘后转成文字。"""
         folder = day_dir(self.media_root, "inbox")
         items: list[dict] = []
+        voice_notes: list[str] = []
         for raw in event.attachments:
             entry = dict(raw)
-            if entry.get("kind") == "image" and entry.get("url") and not entry.get("path"):
+            kind = entry.get("kind")
+            if kind == "image" and entry.get("url") and not entry.get("path"):
                 path = await download(str(entry["url"]), folder, ".jpg")
                 if path:
                     entry["path"] = path
+            elif kind == "voice":
+                path = entry.get("path")
+                if not path and entry.get("url"):
+                    path = await download(str(entry["url"]), folder, ".amr")
+                    if path:
+                        entry["path"] = path
+                if path:
+                    text = await self._transcribe(str(path))
+                    voice_notes.append(f"[语音] {text}" if text else "[语音]")
             items.append(entry)
-        return replace(event, attachments=items)
+
+        text = event.text
+        if voice_notes:
+            note = "\n".join(voice_notes)
+            text = f"{text}\n{note}" if text else note
+        return replace(event, text=text, attachments=items)
+
+    async def _transcribe(self, path: str) -> str:
+        if self.transcriber is None:
+            return ""
+        try:
+            return await asyncio.to_thread(self.transcriber, path)
+        except Exception as exc:
+            log.warning("语音转写失败：%s", exc)
+            return ""
 
     async def _reader(self, ws) -> None:
         try:
@@ -129,8 +159,6 @@ class OneBotChannel:
                 event = self._to_event(payload)
                 if event is None or self._inbox is None:
                     continue
-                if event.attachments and self.media_root:
-                    event = await self._hydrate(event)      # 下载图片到工作目录
                 self._inbox.put_nowait(event)
         except asyncio.CancelledError:
             raise
@@ -189,6 +217,15 @@ class OneBotChannel:
                     at_self = True
             elif seg_type == "image":
                 attachments.append({"kind": "image", "url": data.get("url"), "file": data.get("file")})
+            elif seg_type == "record":
+                attachments.append(
+                    {
+                        "kind": "voice",
+                        "url": data.get("url"),
+                        "file": data.get("file"),
+                        "path": data.get("path"),
+                    }
+                )
 
         text = "".join(text_parts).strip()
         if not text and not attachments:

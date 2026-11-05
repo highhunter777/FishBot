@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import shutil
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -19,9 +21,15 @@ PORT = 30011
 
 async def main() -> None:
     async with MockOneBot(PORT) as server:
+        media = pathlib.Path(tempfile.mkdtemp())
+        voice = media / "voice.amr"
+        voice.write_bytes(b"fake")
+
         channel = OneBotChannel(
             ws_url=f"ws://127.0.0.1:{PORT}",
             allowed_users={"12345"},
+            media_root=str(media),
+            transcriber=lambda path: "今天天气不错",
         )
 
         events: asyncio.Queue = asyncio.Queue()
@@ -101,7 +109,23 @@ async def main() -> None:
         assert not ev.is_private and ev.text == "帮我看下" and ev.conv_id == "g:555", ev
         print("ok 群 @ 解析")
 
-        # 5) 陌生人（非白名单）在群里不该进来 —— 白名单非空时由 Router 拦，这里只验证 conv 正确
+        # 5) 语音：record 段落到本地并转写成文字，语音-only 也要能进会话
+        await server.send_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 12345,
+                "message_id": 5,
+                "message": [
+                    {"type": "record", "data": {"file": "voice.amr", "path": str(voice)}}
+                ],
+            }
+        )
+        ev = await asyncio.wait_for(events.get(), timeout=3)
+        assert ev.text == "[语音] 今天天气不错", ev.text
+        assert ev.attachments[0]["kind"] == "voice", ev.attachments
+        print("ok 语音转写")
+
         # 6) 发送结构
         await channel.send("u:12345", OutboundAction("text", "收到[ CQ:at,qq=1 ]"))
         await asyncio.sleep(0.2)
@@ -144,6 +168,8 @@ async def main() -> None:
 
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+    shutil.rmtree(media, ignore_errors=True)
 
     print("\nQQ OneBot 渠道通过")
 

@@ -3,3 +3,9 @@ uvicorn[standard]>=0.27
 httpx>=0.26
 PyYAML>=6.0
 pydantic>=2.5
+
+# 语音转写（可选）：不装则 QQ 语音只标记 [语音]，聊天不受影响
+faster-whisper>=1.2
+pilk>=0.2
+av>=12.0
+numpy>=1.24

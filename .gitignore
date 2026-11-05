@@ -1,6 +1,9 @@
 # 运行时数据：SQLite、日志、NapCat 登录态（183MB，绝不能进仓库）
 data/
 
+# 本地语音模型（whisper-small 约 480MB，按需下载）
+models/
+
 # 密钥与本地环境
 .env
 .env.local

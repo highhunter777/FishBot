@@ -16,6 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+from . import stt
 from .agent.factory import build_agent
 from .alert import notify
 from .approval import ApprovalGate
@@ -49,6 +50,13 @@ def _build_qq(cfg: Config) -> OneBotChannel | None:
     if not token and qq.get("token_env"):
         token = os.getenv(str(qq["token_env"]), "")
 
+    transcriber = None
+    if cfg.stt.enabled:
+        if stt.ready(cfg):
+            transcriber = lambda path: stt.transcribe(path, cfg)   # noqa: E731
+        else:
+            log.warning("语音转写已开启但模型目录不存在：%s", cfg.stt.model)
+
     return OneBotChannel(
         ws_url=str(ws_url),
         access_token=token,
@@ -56,6 +64,7 @@ def _build_qq(cfg: Config) -> OneBotChannel | None:
         group_requires_at=bool(qq.get("group_requires_at", True)),
         allowed_users=cfg.allowed_users,
         media_root=cfg.agents["worker"].cwd if "worker" in cfg.agents else "",
+        transcriber=transcriber,
     )
 
 

@@ -70,6 +70,13 @@ class MemoryCfg:
 
 
 @dataclass(slots=True)
+class SttCfg:
+    enabled: bool = True
+    model: str = "models/whisper-small"   # 相对仓库根目录或绝对路径
+    language: str = "zh"
+
+
+@dataclass(slots=True)
 class AlertCfg:
     enabled: bool = True
     interval_s: float = 120.0      # 巡检间隔
@@ -89,6 +96,7 @@ class Config:
     default_agent: str = "chat"
     memory: MemoryCfg = field(default_factory=MemoryCfg)
     alerts: AlertCfg = field(default_factory=AlertCfg)
+    stt: SttCfg = field(default_factory=SttCfg)
 
     def agent_for(self, *, channel: str, is_private: bool, text: str) -> str:
         for rule in self.routes:
@@ -142,6 +150,7 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
 
     memory = MemoryCfg(**dict(raw.get("memory") or {}))
     alerts = AlertCfg(**dict(raw.get("alerts") or {}))
+    stt = SttCfg(**dict(raw.get("stt") or {}))
 
     return Config(
         db_path=db_path,
