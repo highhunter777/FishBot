@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 
 SEEN_LIMIT = 500
 SEND_TIMEOUT = 20.0
-POKE_COOLDOWN_S = 5.0       # 同一会话两次回戳的最小间隔
+POKE_LIMIT = 3              # 同一会话连回几次后进入冷却
+POKE_COOLDOWN_S = 5.0       # 到上限后冷却多久
 
 _CLOSED = object()     # 读循环结束的哨兵
 
@@ -63,7 +64,8 @@ class OneBotChannel:
         self._pending: dict[str, asyncio.Future] = {}
         self._seen: OrderedDict[str, float] = OrderedDict()
         self._bg: set[asyncio.Task] = set()     # 后台回戳等轻任务
-        self._last_poke: dict[str, float] = {}
+        self._poke_count: dict[str, int] = {}   # 本轮已回戳次数
+        self._poke_until: dict[str, float] = {} # 冷却结束时间
 
     # ---------- 连接 ----------
 
@@ -304,9 +306,14 @@ class OneBotChannel:
             return
 
         now = time.monotonic()
-        if now - self._last_poke.get(conv_id, 0.0) < POKE_COOLDOWN_S:
+        if now < self._poke_until.get(conv_id, 0.0):
             return
-        self._last_poke[conv_id] = now
+        count = self._poke_count.get(conv_id, 0) + 1
+        if count >= POKE_LIMIT:
+            self._poke_count[conv_id] = 0
+            self._poke_until[conv_id] = now + POKE_COOLDOWN_S
+        else:
+            self._poke_count[conv_id] = count
 
         try:
             await self.send(

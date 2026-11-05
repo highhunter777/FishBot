@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 from mock_onebot import MockOneBot  # noqa: E402
 
 from app.channel.qq_onebot import OneBotChannel  # noqa: E402
+import app.channel.qq_onebot as qq_mod  # noqa: E402
 from app.domain import OutboundAction  # noqa: E402
 from app.files import download  # noqa: E402
 
@@ -203,49 +204,53 @@ async def main() -> None:
         assert poke["params"] == {"user_id": 12345, "group_id": 555}, poke
         print("ok 戳一戳")
 
-        # 10) 收到戳一戳：随机回一句，且不产生会话事件
-        before = len([r for r in server.received if r.get("action") == "send_group_msg"])
-        await server.send_event(
-            {
-                "post_type": "notice",
-                "notice_type": "notify",
-                "sub_type": "poke",
-                "time": 1762330000,
-                "user_id": 12345,
-                "target_id": 99999,
-                "group_id": 555,
-            }
-        )
-        replies: list[dict] = []
-        for _ in range(50):
-            await asyncio.sleep(0.1)
-            replies = [r for r in server.received if r.get("action") == "send_group_msg"]
-            if len(replies) > before:
-                break
-        assert len(replies) > before, "戳一戳没有回应"
-        segs = replies[-1]["params"]["message"]
+        # 10) 戳一戳：连回 3 次后进入冷却，冷却结束恢复
+        qq_mod.POKE_COOLDOWN_S = 1.0
+
+        def group_rows() -> list[dict]:
+            return [r for r in server.received if r.get("action") == "send_group_msg"]
+
+        async def send_poke(t: int) -> None:
+            await server.send_event(
+                {
+                    "post_type": "notice",
+                    "notice_type": "notify",
+                    "sub_type": "poke",
+                    "time": t,
+                    "user_id": 12345,
+                    "target_id": 99999,
+                    "group_id": 555,
+                }
+            )
+
+        async def wait_rows(n: int) -> list[dict]:
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if len(group_rows()) >= n:
+                    break
+            return group_rows()
+
+        base = len(group_rows())
+        for i in range(3):
+            await send_poke(1762330000 + i)
+        rows = await wait_rows(base + 3)
+        assert len(rows) == base + 3, f"应连回 3 次，实际 {len(rows) - base}"
+        segs = rows[base]["params"]["message"]
         assert segs[0] == {"type": "at", "data": {"qq": "12345"}}, segs
         assert segs[-1]["type"] == "text" and segs[-1]["data"]["text"], segs
         assert events.empty(), "戳一戳不该进会话"
-        print("ok 戳一戳回话")
+        print("ok 戳一戳连回 3 次")
 
-        # 10.5) 冷却期内再戳不回
-        before_cd = len([r for r in server.received if r.get("action") == "send_group_msg"])
-        await server.send_event(
-            {
-                "post_type": "notice",
-                "notice_type": "notify",
-                "sub_type": "poke",
-                "time": 1762330001,
-                "user_id": 12345,
-                "target_id": 99999,
-                "group_id": 555,
-            }
-        )
-        await asyncio.sleep(0.8)
-        after_cd = len([r for r in server.received if r.get("action") == "send_group_msg"])
-        assert after_cd == before_cd, "冷却期内不该再回戳"
-        print("ok 戳一戳冷却")
+        await send_poke(1762330003)
+        await asyncio.sleep(0.3)
+        assert len(group_rows()) == base + 3, "到上限后应冷却"
+        print("ok 戳一戳到上限冷却")
+
+        await asyncio.sleep(0.9)
+        await send_poke(1762330004)
+        rows = await wait_rows(base + 4)
+        assert len(rows) == base + 4, "冷却结束应恢复"
+        print("ok 戳一戳冷却后恢复")
 
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
