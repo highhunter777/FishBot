@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -13,6 +14,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import AsyncIterator
 
 import websockets
@@ -120,6 +122,8 @@ class OneBotChannel:
                     entry["path"] = path
             elif kind == "voice":
                 path = entry.get("path")
+                if path and not Path(str(path)).is_file():
+                    path = None     # NapCat 在容器里，/app/... 这种路径宿主机看不到
                 if not path and entry.get("url"):
                     path = await download(str(entry["url"]), folder, ".amr")
                     if path:
@@ -279,7 +283,7 @@ class OneBotChannel:
             message.append({"type": "reply", "data": {"id": reply_to}})
 
         if action.kind in ("image", "file") and action.media:
-            message.append({"type": "image", "data": {"file": action.media}})
+            message.append({"type": "image", "data": {"file": self._media_ref(action.media)}})
             if action.text:
                 message.append({"type": "text", "data": {"text": action.text}})
         elif action.text:
@@ -296,6 +300,16 @@ class OneBotChannel:
         message_id = (resp.get("data") or {}).get("message_id")
         if message_id:
             self._last_sent[conv_id] = str(message_id)
+
+    @staticmethod
+    def _media_ref(media: str) -> str:
+        """本地文件转 base64：NapCat 在容器里，够不到宿主机的路径。"""
+        if media.startswith(("base64://", "http://", "https://", "file://")):
+            return media
+        path = Path(media)
+        if path.is_file():
+            return "base64://" + base64.b64encode(path.read_bytes()).decode()
+        return media
 
     async def recall(self, conv_id: str) -> bool:
         """撤回这个会话里最后一条自己发的消息。"""

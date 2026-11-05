@@ -126,7 +126,17 @@ async def main() -> None:
         assert ev.attachments[0]["kind"] == "voice", ev.attachments
         print("ok 语音转写")
 
-        # 6) 发送结构
+        # 6) 本地图片转 base64 发送（NapCat 在容器里够不到宿主机路径）
+        image = media / "sticker.jpg"
+        image.write_bytes(b"fake-image")
+        await channel.send("u:12345", OutboundAction("image", media=str(image)))
+        await asyncio.sleep(0.2)
+        image_msg = [r for r in server.received if r.get("action") == "send_private_msg"][-1]
+        seg = image_msg["params"]["message"][0]
+        assert seg["type"] == "image" and seg["data"]["file"].startswith("base64://"), seg
+        print("ok 本地图片转 base64")
+
+        # 7) 发送结构
         await channel.send("u:12345", OutboundAction("text", "收到[ CQ:at,qq=1 ]"))
         await asyncio.sleep(0.2)
         sent = [r for r in server.received if r.get("action") == "send_private_msg"]
