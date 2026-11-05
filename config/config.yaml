@@ -129,6 +129,9 @@ alerts:
   enabled: true
   interval_s: 120
   threshold: 3
+  restart_napcat: true          # 掉线达到阈值时自动 docker restart
+  napcat_container: napcat
+  restart_cooldown_s: 600       # 两次自动重启的最小间隔
 
 limits:
   "*":        { interval_s: 1.0, max_len: 1500 }

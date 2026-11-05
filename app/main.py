@@ -31,7 +31,7 @@ from .pump import pump_channel
 from .router import Router
 from .session import SessionService
 from .store import Store
-from .watchdog import Watchdog
+from .watchdog import Watchdog, restart_container
 
 log = logging.getLogger(__name__)
 
@@ -102,11 +102,17 @@ async def lifespan(app: FastAPI):
     router.attach_channels(channels)
 
     if channels and cfg.alerts.enabled:
+        def _restart(name: str) -> bool:
+            """只重启 QQ 容器；其他渠道没有对应的修复动作。"""
+            return restart_container(cfg.alerts.napcat_container) if name == "qq_onebot" else False
+
         watchdog = Watchdog(
             channels,
             interval_s=cfg.alerts.interval_s,
             threshold=cfg.alerts.threshold,
             notifier=notify,
+            restarter=_restart if cfg.alerts.restart_napcat else None,
+            restart_cooldown_s=cfg.alerts.restart_cooldown_s,
         )
         tasks.append(asyncio.create_task(watchdog.run(), name="watchdog"))
 

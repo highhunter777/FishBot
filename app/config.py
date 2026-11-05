@@ -80,7 +80,10 @@ class SttCfg:
 class AlertCfg:
     enabled: bool = True
     interval_s: float = 120.0      # 巡检间隔
-    threshold: int = 3             # 连续多少次不健康才告警
+    threshold: int = 3             # 连续多少次不健康才处理
+    restart_napcat: bool = False   # 掉线到阈值时自动重启 NapCat
+    napcat_container: str = "napcat"
+    restart_cooldown_s: float = 600.0
 
 
 @dataclass(slots=True)

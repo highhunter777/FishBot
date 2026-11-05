@@ -64,6 +64,39 @@ def main() -> None:
     dog2.check_once()
     check("无 connected 属性视为健康", not sent, str(sent))
 
+    # 自动重启：到阈值重启一次；仍掉线转人工；恢复后通知
+    calls: list[str] = []
+
+    def restarter(name: str) -> bool:
+        calls.append(name)
+        return True
+
+    sent.clear()
+    channel = FakeChannel(connected=False)
+    dog3 = Watchdog(
+        {"qq_onebot": channel},
+        interval_s=120,
+        threshold=2,
+        notifier=notifier,
+        restarter=restarter,
+    )
+    dog3.check_once()
+    check("未到阈值不自动重启", not calls, str(calls))
+    dog3.check_once()
+    check("到阈值自动重启一次", calls == ["qq_onebot"], str(calls))
+    check("重启时发通知", any("已自动重启" in s for s in sent), str(sent))
+
+    sent.clear()
+    dog3.check_once()
+    dog3.check_once()
+    check("重启后仍掉线转人工", any("扫码" in s for s in sent), str(sent))
+    check("同一轮掉线不重复重启", calls == ["qq_onebot"], str(calls))
+
+    channel.connected = True
+    sent.clear()
+    dog3.check_once()
+    check("恢复后通知", any("恢复" in s for s in sent), str(sent))
+
     print(f"\n全部通过：{PASS} 项")
 
 

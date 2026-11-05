@@ -95,7 +95,7 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 
 | 层 | 实现 | 管什么 |
 |---|---|---|
-| 进程内巡检 | `app/watchdog.py` | QQ 掉线连续 6 分钟 → 桌面弹窗；恢复再弹一条 |
+| 进程内巡检 | `app/watchdog.py` | QQ 掉线连续 6 分钟 → 自动 `docker restart napcat`，仍不行再弹窗；恢复再弹一条 |
 | 外部看门狗 | `scripts/supervise.ps1` + 计划任务「FishBot Supervisor」 | 每 2 分钟探 `/healthz`，挂了自动重启并通知 |
 | 登录态持久化 | `data/napcat/qq` 挂载卷 | 容器/电脑重启后用 `ACCOUNT` 快速登录，不用重扫 |
 
@@ -105,6 +105,12 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 - 连续 2 次探活失败（4 分钟）才动手，避免瞬时抖动
 - 10 分钟内重启过会跳过，防止反复重启
 - 重启后仍不可用 → 弹窗提示人工介入
+
+进程内巡检与它互补：
+
+- QQ WS 连续 3 次不健康（约 6 分钟）→ 自动重启 NapCat 容器；同一轮掉线只重启一次，10 分钟后才允许下一次
+- 自动重启后仍连不上 → 弹窗提示人工扫码/过 WebUI 验证
+- 频道重连退避上限 20 秒，NapCat 恢复后很快接上
 
 ### 免扫码重启（密码回退登录）
 
