@@ -1,0 +1,90 @@
+# 叠加到 dsh 的 acp profile 上：沿用桌面端那套 provider，不碰官方 key。
+# 只影响通过 FishBot 拉起的这个 acp 进程，不动桌面端配置。
+#
+# 三套 provider 都保留，主用 opencode-go（和桌面端默认一致）：
+#   opencode-go -> OPENCODE_GO_API_KEY（桌面端 agent-default-model 用的就是它）
+#   opencode    -> OPENCODE_API_KEY
+#   me          -> ME_API_KEY，指向本机 http://127.0.0.1:4000 的 OpenAI 兼容网关
+#
+# key 不用写在这里：config.yaml 里 worker.dsh_refs=true 会从
+# ~/.dsh/.credentials.yaml 的 refs 自动注入同名环境变量。
+
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        models:
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+            contextWindow: 1000000
+            maxTokens: 384000
+            input:
+              - text
+              - image
+          - id: glm-5.3
+            name: GLM-5.3
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+          - id: kimi-k3
+            name: Kimi K3
+            contextWindow: 1048576
+            maxTokens: 131072
+            input:
+              - text
+              - image
+      opencode:
+        apiKeyEnv: OPENCODE_API_KEY
+        models:
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+            contextWindow: 1000000
+            maxTokens: 384000
+            input:
+              - text
+              - image
+      me:
+        apiKeyEnv: ME_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:4000/v1
+        models:
+          - id: deepseek-v4.1-flash
+            name: Deepseek-V4.1-Flash
+            contextWindow: 1000000
+            maxTokens: 128000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              low: low
+              medium: medium
+              high: high
+          - id: glm-5.3-flash
+            name: GLM-5.3-Flash
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+            reasoningEfforts:
+              off: null
+              low: low
+              medium: medium
+              high: high
+
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: opencode-go
+    model: deepseek-v4.1-flash
+    reasoningEffort: max
+
+# ACP 会话实际用的是这一份（默认锁死在 deepseek-official），必须一起改
+- id: acp
+  name: "@deepseek-ai/dsh-acp"
+  config:
+    provider: opencode-go
+    model: deepseek-v4.1-flash

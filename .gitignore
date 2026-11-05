@@ -1,0 +1,27 @@
+# 运行时数据：SQLite、日志、NapCat 登录态（183MB，绝不能进仓库）
+data/
+
+# 密钥与本地环境
+.env
+.env.local
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 日志
+*.log
+
+# agent 的工作目录（运行时产物）
+workspace/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

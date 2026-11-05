@@ -1,0 +1,131 @@
+# FishBot 配置。改这里就够了，不用改代码。
+
+db_path: data/fishbot.db
+prompts_dir: config/prompts
+default_agent: worker        # 默认走 agent；想闲聊用 /chat
+
+# 允许使用的人（QQ 号）。留空时：QQ 渠道只服务私聊，群聊一律不理。
+# 谁能用它
+#   allowed_users  能对话的人（空 = 任何人）。默认后端是 agent，所以这些人也能让 agent 干活
+#   owner_users    能用 / 命令的人（空 = 退回 allowed_users）。命令 = 改行为/换后端/清记忆
+#
+# 当前策略：双实例
+#   私聊 / 本机  → worker       (danger-full-access)  你，全盘可用
+#   访客 / 群友  → worker_lite  (read-only)           只读 + guard 防泄露
+#
+# 保留策略（都在，随时可切）：
+#   · 单实例 + guard：删掉 worker_lite，把 worker 降成 workspace-write
+#   · 收紧私聊：worker 降回 workspace-write，只有工作目录可写
+#   · 命令门禁：owner_users 只留自己，其他人只能聊
+#   · 工具级审批：换支持 ACP request_permission 的后端（permission.py 那套就生效了）
+allowed_users: ["2090127048"]
+owner_users: ["2090127048"]
+
+channels:
+  web:
+    enabled: true
+
+  # QQ 小号：NapCat / LLOneBot 的 OneBot 11 反向 WebSocket
+  qq:
+    enabled: true
+    ws_url: ws://127.0.0.1:3001
+    access_token: ""          # 与 NapCat WebUI「WebSocket 服务器」里的 token 一致
+    token_env: NAPCAT_TOKEN   # 也可写到 .env，避免明文进仓库
+    self_id: ""               # 留空自动探测登录账号
+    group_requires_at: true   # 群里必须 @ 才响应
+
+  heybox:
+    enabled: false
+  bili_live:
+    enabled: false
+
+agents:
+  # 会说话的：日常问答、闲聊。
+  # 默认复用桌面端那个本机网关（和 dsh 同一套 key，不需要官方 key）。
+  # 想换任何 OpenAI 兼容接口，改 base_url / model / api_key_env 即可。
+  chat:
+    adapter: openai           # openai | echo | acp
+    model: deepseek-v4.1-flash
+    # OpenCode Go 的 OpenAI 兼容端点（models.dev 里的 api 字段），需要带 session 头
+    base_url: https://opencode.ai/inference/go/openai/v1
+    api_key_env: OPENCODE_GO_API_KEY
+    headers:
+      x-opencode-session: fishbot
+    temperature: 0.85
+    timeout_s: 90
+    # 角色卡（.png / .json）。配了就替代 prompts/chat/*.md 当人格。
+    # 换成别人分享的卡：把文件丢进 config/characters/，改这一行路径即可。
+    character: config/characters/maidking.json
+    # 走 opencode 是正经 API，system 能透传；这个开关只在本机 4000 网关那类才需要。
+    system_in_user: false
+
+  # 会干活的：/do 走这里。
+  # 默认复用本机 DeepSeek Harness 桌面端内置的 dsh-acp：
+  #   用桌面端主程序以 Node 模式跑 asar 内的 CLI，profile 用内置的 acp。
+  #   共享 ~/.dsh 的会话与配置；模型 key 走 .env 里的 DEEPSEEK_API_KEY。
+  # 想换后端只改这一块，例如：
+  #   command: ["cmd", "/c", "npx", "-y", "@zed-industries/codex-acp@latest"]
+  # 会干活的：/do 走这里。owner 用这个（可写 workspace）。
+  worker:
+    adapter: acp
+    command:
+      - "E:\\DeepSeekHarness\\DeepSeek Harness.exe"
+      - "E:\\DeepSeekHarness\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js"
+      - "acp"
+      - "--patch"
+      - "E:\\FishBot\\config\\dsh-acp.patch.yml"
+    env:
+      ELECTRON_RUN_AS_NODE: "1"
+      # dsh 自己的沙盒级别（ACP 的 request_permission 它不发，所以这是我们唯一能控制的开关）
+      # read-only | workspace-write | danger-full-access
+      DSH_PERMISSION_MODE: danger-full-access    # owner 私聊/自己 @：全盘可读写
+    # 只注入 dsh 自己调模型要用的那个 key；其余（ME / OPENCODE）不传，减少泄露面
+    dsh_refs: ["OPENCODE_GO_API_KEY"]
+    read_only: false          # 我们这层的判定（对 dsh 无效，仅对支持 request_permission 的后端）
+    character: config/characters/maidking.json   # 和 chat 共用同一张卡（干活时自动切简洁汇报）
+    memory_scope: main        # 和 worker_lite 共享长期记忆
+    cwd: C:/Users/hunter/FishBot-workspace   # 放在用户目录下：E 盘上 dsh 补沙盒 ACL 会失败
+    timeout_s: 600
+
+  # 同一个 dsh，但沙盒只读。非 owner 的消息会被路由到这里。
+  worker_lite:
+    adapter: acp
+    command:
+      - "E:\\DeepSeekHarness\\DeepSeek Harness.exe"
+      - "E:\\DeepSeekHarness\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js"
+      - "acp"
+      - "--patch"
+      - "E:\\FishBot\\config\\dsh-acp.patch.yml"
+    env:
+      ELECTRON_RUN_AS_NODE: "1"
+      DSH_PERMISSION_MODE: read-only           # 其他人：只能看
+    dsh_refs: ["OPENCODE_GO_API_KEY"]
+    read_only: true
+    character: config/characters/maidking.json
+    memory_scope: main        # 同一份记忆与人格
+    cwd: C:/Users/hunter/FishBot-workspace
+    timeout_s: 600
+
+routes:
+  - { channel: bili_live, agent: chat }   # 弹幕走最便宜的
+  - { default: true, agent: worker }      # 其余默认交给 agent
+
+# 记忆维护：用 chat 的模型做摘要与事实抽取，后台跑，不阻塞回复
+memory:
+  enabled: true
+  agent: chat            # 用哪个后端的模型
+  summarize: true        # 超 40 条时用 LLM 压缩（失败自动退回规则拼接）
+  extract_facts: true    # 从私聊里抽取长期事实写入画像
+
+# 掉线提醒：连续 N 次巡检都不健康，弹桌面通知（恢复后再弹一条）
+alerts:
+  enabled: true
+  interval_s: 120
+  threshold: 3
+
+limits:
+  "*":        { interval_s: 1.0, max_len: 1500 }
+  web:        { interval_s: 0.0, max_len: 8000 }
+  qq:         { interval_s: 1.0, max_len: 1500 }
+  qq_onebot:  { interval_s: 1.0, max_len: 1500 }
+  bili_live:  { interval_s: 3.0, max_len: 20 }
