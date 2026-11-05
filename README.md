@@ -73,10 +73,17 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 |---|---|
 | Web 聊天页（流式 + 打字节奏） | 完成 |
 | QQ 小号（NapCat OneBot 11，@ 触发、去重、重连） | 完成（待真机联调） |
-| 图片收发（落到 agent 工作目录的 `inbox/`，单文件 10 MB 上限） | 完成 |
+| 图片/表情接收（落盘到 `inbox/`，只有表情不带字也会回） | 完成 |
 | 表情包（内置 15 张 DeepSeek 鲸鱼娘，`[表情:键名]` 触发） | 完成 |
 | 语音消息（SILK/AMR → 本地 whisper 转写） | 完成 |
 | 戳一戳（连回 3 次后冷却 5 秒） | 完成 |
+| 主动提醒（`/remind`，跨重启保留） | 完成 |
+| 群聊被动上下文（被 @ 时带上最近发言） | 完成 |
+| 长期记忆（本地向量召回 + 时效衰减 + 画像去重） | 完成 |
+| 反馈学习（纠正自动归纳为规则，`/rules` 查看） | 完成 |
+| 图片 OCR（截图/报错图先本地认字） | 完成 |
+| 最近图片上下文（后续提问可引用刚才那张图） | 完成 |
+| 语音回复（`/voice`，edge-tts → SILK） | 完成 |
 | 只读实例（禁 shell，读取限制在工作目录） | 完成 |
 | ACP 本地 agent（`/do`，权限审批 y/n） | 完成 |
 | OpenAI 兼容后端 + 无 key 降级 | 完成 |
@@ -88,10 +95,21 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 
 ## 语音与表情
 
-- **图片**：入站图片在 handler 任务里后台下载到 `inbox/日期/`，不挡后续消息；单文件超过 10 MB 直接丢弃。
+- **图片**：入站图片在 handler 任务里后台下载到 `inbox/日期/`，不挡后续消息；单文件超过 10 MB 直接丢弃。普通图片先跑本地 RapidOCR，识别到的文字以 `[图片文字] ...` 随消息进会话；最近 3 张图会在 10 分钟内保留，后续问“刚才那张”时把路径注入提示词。
 - **语音**：QQ 语音先落到工作目录的 `inbox/`，`pilk` 解 SILK 后由本地 `faster-whisper` 转写，文本以 `[语音] ...` 进会话；模型默认放 `models/whisper-small`（已在 `.gitignore`）。没装依赖或模型缺失时自动降级为只标记 `[语音]`。
 - **表情**：`assets/stickers/` 内置 15 张 DeepSeek 鲸鱼娘（大肥鱼）表情，文件名即键名（`开心.jpg` → `[表情:开心]`），可另写 `index.json` 的 `aliases`；只在聊天里触发，正经汇报/报错时不发。素材来自 [fisharchive.cc](https://fisharchive.cc/)，CC BY-NC-SA 4.0，非商用，出处与署名见 `assets/stickers/index.json`。
-- **戳一戳**：收到 `notice/notify/poke` 后从 `app/persona.py` 的 `POKE_REPLIES` 里随机回一句；同一会话连回 3 次后冷却 5 秒，冷却结束重新计数。群里会先 @ 戳的人，不进模型会话。
+- **收表情**：对方发来的 QQ 小黄脸（`face`）、商城表情（`mface`）和动画表情（`image` + `sub_type=1`）都会转成 `[对方发来…]` 文本；带图的会落到 `inbox/` 供模型查看，只有表情不带字也会触发回复。
+- **语音回复**：`/voice 你好呀` 用 edge-tts 生成中文语音，转成腾讯 SILK 后以 `record` 发回；代理、音色、语速都在 `config.yaml` 的 `tts` 段。
+- **戳一戳**：收到 `notice/notify/poke` 后 35% 概率直接回戳对方，其余情况从 `POKE_REPLIES` 随机回一句。同一会话连回 3 次后冷却 5 秒。群里会先 @ 戳的人，不进模型会话。
+
+## 主动与记忆
+
+- **提醒**：`/remind 10m 喝水`、`/remind 明天 8:00 起床`、`/remind 2026-11-06 08:00 开会`；`/remind` 看列表，`/remind cancel <id>` 取消。提醒落 SQLite，重启后仍会补发。
+- **中断跟进**：启动时若发现上次进程留下的未完成任务，会主动发一句说明，并把任务标成 `interrupted`。
+- **记忆召回**：优先用本地 `BAAI/bge-small-zh-v1.5` 向量，模型缺失时自动退回字级 n-gram + IDF；两者都带时效衰减。画像键会归一化去重（`称呼` / `称呼：` 视为同一个）。OCR 文字和语音转写随消息一起入库并参与向量召回，所以“上次那张报错截图”也能被想起来。
+- **群聊上下文**：每个群在内存里保留最近 20 条发言；被 @ 时把最近 12 条连同发言人注入提示词，只用于理解前文，不逐条回应。
+- **反馈学习**：私聊里出现纠正/约束语句（“别用列表”“以后都…”）时，用 chat 模型归纳成一条规则，写入 SQLite 并注入后续提示词；`/rules` 查看已学到的规则。
+- **静默工具进度**：QQ 等推送渠道不再发送“在弄 xx”，只在 web/cli 显示，减少刷屏和风控。
 
 ## 服务守护
 
@@ -207,8 +225,11 @@ python -m app.cli "/do 检查 ME_API_KEY 是否为空"
 ## 测试
 
 ```bash
-python tests/smoke.py        # 28 项：store/persona/render/permission/router
-python tests/qq_e2e.py       # OneBot 渠道（mock 服务端）
+python tests/smoke.py         # 28 项：store/persona/render/permission/router
+python tests/qq_e2e.py        # OneBot 渠道（mock 服务端）
+python tests/proactive_test.py  # 提醒解析/投递/中断跟进
+python tests/memory_test.py    # 摘要/画像/反馈规则（真调模型）
+python tests/tts_test.py       # /voice 指令（不真调 edge-tts）
 python tests/acp_e2e.py      # ACP 适配器 + mock agent
 python tests/router_acp.py   # /do -> 工具调用 -> 审批 -> 继续
 ```
@@ -228,6 +249,10 @@ app/router.py      白名单/节流/指令/选后端/首响/审批
 app/pump.py        Push 渠道事件泵
 app/stt.py         语音转写（SILK → 文本）
 app/stickers.py    表情标记解析与素材索引
+app/proactive.py   定时提醒与中断任务跟进
+app/embed.py       本地中文向量（记忆召回）
+app/ocr.py         本地图片文字识别（RapidOCR）
+app/tts.py         语音合成（edge-tts → SILK）
 app/agent/         openai / echo / acp / unavailable
 app/channel/       web / qq_onebot
 ```
