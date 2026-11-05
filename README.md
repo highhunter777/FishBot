@@ -73,10 +73,11 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 |---|---|
 | Web 聊天页（流式 + 打字节奏） | 完成 |
 | QQ 小号（NapCat OneBot 11，@ 触发、去重、重连） | 完成（待真机联调） |
-| 图片收发（落到 agent 工作目录的 `inbox/`） | 完成 |
+| 图片收发（落到 agent 工作目录的 `inbox/`，单文件 10 MB 上限） | 完成 |
 | 表情包（内置 15 张 DeepSeek 鲸鱼娘，`[表情:键名]` 触发） | 完成 |
 | 语音消息（SILK/AMR → 本地 whisper 转写） | 完成 |
-| 戳一戳（收到后随机回一句话） | 完成 |
+| 戳一戳（收到后随机回一句，5 秒冷却） | 完成 |
+| 只读实例（禁 shell，读取限制在工作目录） | 完成 |
 | ACP 本地 agent（`/do`，权限审批 y/n） | 完成 |
 | OpenAI 兼容后端 + 无 key 降级 | 完成 |
 | 会话记忆 / 摘要压缩 / `/remember` | 完成 |
@@ -87,9 +88,10 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 
 ## 语音与表情
 
+- **图片**：入站图片在 handler 任务里后台下载到 `inbox/日期/`，不挡后续消息；单文件超过 10 MB 直接丢弃。
 - **语音**：QQ 语音先落到工作目录的 `inbox/`，`pilk` 解 SILK 后由本地 `faster-whisper` 转写，文本以 `[语音] ...` 进会话；模型默认放 `models/whisper-small`（已在 `.gitignore`）。没装依赖或模型缺失时自动降级为只标记 `[语音]`。
 - **表情**：`assets/stickers/` 内置 15 张 DeepSeek 鲸鱼娘（大肥鱼）表情，文件名即键名（`开心.jpg` → `[表情:开心]`），可另写 `index.json` 的 `aliases`；只在聊天里触发，正经汇报/报错时不发。素材来自 [fisharchive.cc](https://fisharchive.cc/)，CC BY-NC-SA 4.0，非商用，出处与署名见 `assets/stickers/index.json`。
-- **戳一戳**：收到 `notice/notify/poke` 后从 `app/persona.py` 的 `POKE_REPLIES` 里随机回一句；群里会先 @ 戳的人，不进模型会话。
+- **戳一戳**：收到 `notice/notify/poke` 后从 `app/persona.py` 的 `POKE_REPLIES` 里随机回一句，同一会话 5 秒内只回一次；群里会先 @ 戳的人，不进模型会话。
 
 ## 服务守护
 
@@ -181,7 +183,8 @@ allowed_users: ["你", "朋友的号"]   # 能聊天
 owner_users:   ["你"]               # 能让它动手（shell / 文件）
 ```
 
-非 owner 发普通消息 → 强制走 `chat`（无工具）；发 `/do` → 直接回「这个只有主人能用」。
+非 owner 发普通消息 → 走 `worker_lite`：`read-only` 沙盒，禁 `bash/pwsh/jobs`，`read`/`read_image`
+只允许工作目录内，`glob/grep` 禁用；发 `/do` → 直接回「这个只有主人能用」。
 本机渠道（`web` / `cli`）不受名单限制。`owner_users` 留空则等同 `allowed_users`。
 
 | 控制点 | 位置 | 说明 |
@@ -190,6 +193,8 @@ owner_users:   ["你"]               # 能让它动手（shell / 文件）
 | 工作目录 | `worker.cwd` | `C:/Users/hunter/FishBot-workspace`。放 E 盘时 dsh 补沙盒 ACL 会失败（`SetNamedSecurityInfoW Win32 5`），pwsh 直接跑不起来 |
 | 注入的密钥 | `worker.dsh_refs` | 传列表只注入需要的：`["OPENCODE_GO_API_KEY"]`。传 `true` 会把所有 refs 都塞进 agent 环境 |
 | 渠道白名单 | `allowed_users` | 非本人消息在 Router 层就丢，不进 agent |
+| 只读实例 | `worker_lite` | 禁 shell；`fs-read-guard` 把 `read`/`read_image` 限在 cwd，禁 `glob/grep` |
+| 读取围栏插件 | `config/dsh-plugins/fs-read-guard.mjs` | 通过 `dsh-acp.patch.yml` 的 `insert` 挂载，只在 `read-only` 生效 |
 | 群聊工具权限 | `permission.evaluate` | 群聊一律 DENY（对支持 ACP 权限的后端生效） |
 
 验证方式：

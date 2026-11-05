@@ -18,12 +18,19 @@ async def pump_channel(channel: PushChannel, router: Router, concurrency: int = 
     async def handle(ev) -> None:
         async with sem:
             try:
+                # 附件下载/转写在 handler 任务里做，不挡住同一个渠道的其他消息
+                prepare = getattr(channel, "prepare", None)
+                if prepare is not None:
+                    ev = await prepare(ev)
+
+                first = True
                 async for action in router.stream(ev):
                     if action.delay:
                         await asyncio.sleep(action.delay)
-                    # 群里回复时带上 @，不然对方不知道在跟谁说话
-                    if not ev.is_private and not action.at_user:
+                    # 群里只在第一条带上 @，分段回复不重复打扰
+                    if not ev.is_private and first and not action.at_user:
                         action = replace(action, at_user=ev.user_id)
+                    first = False
                     # 聊天不引用原消息：每条都带引用条太吵
                     await channel.send(ev.conv_id, action)
             except Exception:

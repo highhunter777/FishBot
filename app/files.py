@@ -16,6 +16,9 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+MAX_BYTES = 10 * 1024 * 1024      # 单文件下载上限：10 MB
+CHUNK = 64 * 1024
+
 
 def day_dir(base: str | Path, kind: str) -> Path:
     """base/inbox/2026-11-05 这种，按需创建。"""
@@ -33,8 +36,13 @@ def _name(url: str, fallback_ext: str) -> str:
     return f"{uuid.uuid4().hex[:12]}{ext or fallback_ext}"
 
 
-async def download(url: str, folder: Path, fallback_ext: str = ".jpg") -> str | None:
-    """下载到 folder，返回本地路径；失败返回 None（不阻塞消息处理）。"""
+async def download(
+    url: str,
+    folder: Path,
+    fallback_ext: str = ".jpg",
+    max_bytes: int = MAX_BYTES,
+) -> str | None:
+    """下载到 folder，返回本地路径；失败或超限返回 None（不阻塞消息处理）。"""
     if not url:
         return None
     target = folder / _name(url, fallback_ext)
@@ -42,13 +50,28 @@ async def download(url: str, folder: Path, fallback_ext: str = ".jpg") -> str | 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(45.0, connect=10.0), follow_redirects=True
         ) as client:
-            resp = await client.get(url)
-            if resp.status_code >= 400:
-                log.warning("下载失败 %s：%s", resp.status_code, url[:60])
-                return None
-            target.write_bytes(resp.content)
+            async with client.stream("GET", url) as resp:
+                if resp.status_code >= 400:
+                    log.warning("下载失败 %s：%s", resp.status_code, url[:60])
+                    return None
+                size = resp.headers.get("content-length", "")
+                if size.isdigit() and int(size) > max_bytes:
+                    log.warning("跳过超限文件 %.1f MB：%s", int(size) / 1048576, url[:60])
+                    return None
+
+                total = 0
+                with target.open("wb") as fh:
+                    async for chunk in resp.aiter_bytes(CHUNK):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            fh.close()
+                            target.unlink(missing_ok=True)
+                            log.warning("下载超过 %.0f MB，已丢弃：%s", max_bytes / 1048576, url[:60])
+                            return None
+                        fh.write(chunk)
         return str(target)
     except Exception as exc:
+        target.unlink(missing_ok=True)
         log.warning("下载失败：%s（%s）", type(exc).__name__, url[:60])
         return None
 

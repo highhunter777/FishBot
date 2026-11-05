@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import http.server
 import pathlib
 import shutil
 import sys
 import tempfile
+import threading
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -15,6 +17,7 @@ from mock_onebot import MockOneBot  # noqa: E402
 
 from app.channel.qq_onebot import OneBotChannel  # noqa: E402
 from app.domain import OutboundAction  # noqa: E402
+from app.files import download  # noqa: E402
 
 PORT = 30011
 
@@ -36,7 +39,7 @@ async def main() -> None:
 
         async def consume():
             async for event in channel.run():
-                await events.put(event)
+                await events.put(await channel.prepare(event))
 
         task = asyncio.create_task(consume())
         await asyncio.wait_for(server.connected.wait(), timeout=5)
@@ -136,6 +139,30 @@ async def main() -> None:
         assert seg["type"] == "image" and seg["data"]["file"].startswith("base64://"), seg
         print("ok 本地图片转 base64")
 
+        # 6.5) 下载上限：超限直接丢弃，不落盘
+        class BigFile(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"x" * 200_000
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), BigFile)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            big = await download(
+                f"http://127.0.0.1:{httpd.server_port}/big", media, ".bin", max_bytes=1024
+            )
+            assert big is None, big
+            assert not list(media.glob("*.bin")), "超限文件不该留在磁盘"
+        finally:
+            httpd.shutdown()
+        print("ok 下载超限丢弃")
+
         # 7) 发送结构
         await channel.send("u:12345", OutboundAction("text", "收到[ CQ:at,qq=1 ]"))
         await asyncio.sleep(0.2)
@@ -201,6 +228,24 @@ async def main() -> None:
         assert segs[-1]["type"] == "text" and segs[-1]["data"]["text"], segs
         assert events.empty(), "戳一戳不该进会话"
         print("ok 戳一戳回话")
+
+        # 10.5) 冷却期内再戳不回
+        before_cd = len([r for r in server.received if r.get("action") == "send_group_msg"])
+        await server.send_event(
+            {
+                "post_type": "notice",
+                "notice_type": "notify",
+                "sub_type": "poke",
+                "time": 1762330001,
+                "user_id": 12345,
+                "target_id": 99999,
+                "group_id": 555,
+            }
+        )
+        await asyncio.sleep(0.8)
+        after_cd = len([r for r in server.received if r.get("action") == "send_group_msg"])
+        assert after_cd == before_cd, "冷却期内不该再回戳"
+        print("ok 戳一戳冷却")
 
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

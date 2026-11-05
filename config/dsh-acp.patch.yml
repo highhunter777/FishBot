@@ -88,3 +88,18 @@
   config:
     provider: opencode-go
     model: deepseek-v4.1-flash
+
+# 只读实例（worker_lite）：文件工具本来就被限制在 cwd 内，
+# 再把能绕过它读全盘的进程执行类工具关掉。owner 的 worker 不受影响。
+- id: tool-bash
+  disabled: !!js process.env.DSH_PERMISSION_MODE === 'read-only' || process.platform === 'win32'
+- id: tool-pwsh
+  disabled: !!js process.env.DSH_PERMISSION_MODE === 'read-only' || process.platform !== 'win32'
+- id: tool-jobs
+  disabled: !!js process.env.DSH_PERMISSION_MODE === 'read-only'
+
+# 只读实例的读侧围栏：read/read_image 限在 cwd，禁 glob/grep 扫盘。
+# 插件源码在 config/dsh-plugins/；DSH 按进程 cwd 解析相对路径，所以这里必须写绝对 file URL。
+- insert:
+    - id: fs-read-guard
+      name: file:///E:/FishBot/config/dsh-plugins/fs-read-guard.mjs

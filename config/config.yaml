@@ -11,7 +11,7 @@ default_agent: worker        # 默认走 agent；想闲聊用 /chat
 #
 # 当前策略：双实例
 #   私聊 / 本机  → worker       (danger-full-access)  你，全盘可用
-#   访客 / 群友  → worker_lite  (read-only)           只读 + guard 防泄露
+#   访客 / 群友  → worker_lite  (read-only)           只读：禁 shell，read 限工作目录
 #
 # 保留策略（都在，随时可切）：
 #   · 单实例 + guard：删掉 worker_lite，把 worker 降成 workspace-write
@@ -87,7 +87,7 @@ agents:
     cwd: C:/Users/hunter/FishBot-workspace   # 放在用户目录下：E 盘上 dsh 补沙盒 ACL 会失败
     timeout_s: 600
 
-  # 同一个 dsh，但沙盒只读。非 owner 的消息会被路由到这里。
+  # 同一个 dsh，但沙盒只读、禁 shell。非 owner 的消息会被路由到这里。
   worker_lite:
     adapter: acp
     command:
@@ -98,7 +98,7 @@ agents:
       - "E:\\FishBot\\config\\dsh-acp.patch.yml"
     env:
       ELECTRON_RUN_AS_NODE: "1"
-      DSH_PERMISSION_MODE: read-only           # 其他人：只能看
+      DSH_PERMISSION_MODE: read-only           # 其他人：禁 shell，read 限 cwd
     dsh_refs: ["OPENCODE_GO_API_KEY"]
     read_only: true
     character: config/characters/maidking.json

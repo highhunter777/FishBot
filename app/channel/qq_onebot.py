@@ -21,13 +21,14 @@ from typing import AsyncIterator
 import websockets
 
 from ..domain import Caps, InboundEvent, OutboundAction
-from ..files import day_dir, download
+from ..files import MAX_BYTES, day_dir, download
 from ..persona import POKE_REPLIES
 
 log = logging.getLogger(__name__)
 
 SEEN_LIMIT = 500
 SEND_TIMEOUT = 20.0
+POKE_COOLDOWN_S = 5.0       # 同一会话两次回戳的最小间隔
 
 _CLOSED = object()     # 读循环结束的哨兵
 
@@ -62,6 +63,7 @@ class OneBotChannel:
         self._pending: dict[str, asyncio.Future] = {}
         self._seen: OrderedDict[str, float] = OrderedDict()
         self._bg: set[asyncio.Task] = set()     # 后台回戳等轻任务
+        self._last_poke: dict[str, float] = {}
 
     # ---------- 连接 ----------
 
@@ -92,8 +94,6 @@ class OneBotChannel:
                         event = await self._inbox.get()
                         if event is _CLOSED:
                             break
-                        if event.attachments and self.media_root:
-                            event = await self._hydrate(event)      # 下载 + 语音转写
                         yield event
                     reader.cancel()
             except asyncio.CancelledError:
@@ -111,6 +111,12 @@ class OneBotChannel:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 20.0)     # 本地 WS，重试便宜，别等太久
 
+    async def prepare(self, event: InboundEvent) -> InboundEvent:
+        """下载附件/转写语音。放在 handler 任务里跑，别堵住读循环和后面的文字消息。"""
+        if event.attachments and self.media_root:
+            return await self._hydrate(event)
+        return event
+
     async def _hydrate(self, event: InboundEvent) -> InboundEvent:
         """把图片段从 url 落到本地供 agent 直接 read；语音段落盘后转成文字。"""
         folder = day_dir(self.media_root, "inbox")
@@ -120,7 +126,7 @@ class OneBotChannel:
             entry = dict(raw)
             kind = entry.get("kind")
             if kind == "image" and entry.get("url") and not entry.get("path"):
-                path = await download(str(entry["url"]), folder, ".jpg")
+                path = await download(str(entry["url"]), folder, ".jpg", MAX_BYTES)
                 if path:
                     entry["path"] = path
             elif kind == "voice":
@@ -128,7 +134,7 @@ class OneBotChannel:
                 if path and not Path(str(path)).is_file():
                     path = None     # NapCat 在容器里，/app/... 这种路径宿主机看不到
                 if not path and entry.get("url"):
-                    path = await download(str(entry["url"]), folder, ".amr")
+                    path = await download(str(entry["url"]), folder, ".amr", MAX_BYTES)
                     if path:
                         entry["path"] = path
                 if path:
@@ -296,6 +302,11 @@ class OneBotChannel:
         conv_id = f"g:{group_id}" if group_id else f"u:{user_id}"
         if self._dedup(f"poke:{conv_id}:{user_id}:{payload.get('time')}"):
             return
+
+        now = time.monotonic()
+        if now - self._last_poke.get(conv_id, 0.0) < POKE_COOLDOWN_S:
+            return
+        self._last_poke[conv_id] = now
 
         try:
             await self.send(
