@@ -7,7 +7,7 @@ import random
 import time
 from typing import AsyncIterator
 
-from . import persona
+from . import persona, stickers
 from .agent.port import AgentPort
 from .approval import ApprovalGate, parse_answer
 from .config import Config
@@ -256,6 +256,22 @@ class Router:
             self.store.task_finish(task_id, "error", f"{type(exc).__name__}: {exc}")
             yield OutboundAction("text", words["error"], delay=0.3)
 
+    def _text_actions(self, text: str, caps: Caps, sink: list[str]) -> list[OutboundAction]:
+        """一段完整文本落成动作：先摘表情标记，再切分，最后补发图片。"""
+        clean, hits = stickers.extract(text)
+        actions: list[OutboundAction] = []
+        if clean:
+            sink.append(clean)
+            for index, part in enumerate(persona.style(clean, caps)):
+                actions.append(OutboundAction("markdown", part, delay=self._delay(part, index)))
+        for name in hits:
+            path = stickers.resolve(name)
+            if path is not None:
+                actions.append(OutboundAction("image", media=str(path), delay=0.4))
+            else:
+                log.info("表情未找到素材：%s", name)
+        return actions
+
     async def _render(
         self,
         first: AgentEvent | None,
@@ -289,9 +305,8 @@ class Router:
                 pending = "".join(buf).strip()
                 buf.clear()
                 if pending:
-                    sink.append(pending)
-                    for index, part in enumerate(persona.style(pending, caps)):
-                        yield OutboundAction("markdown", part, delay=self._delay(part, index))
+                    for action in self._text_actions(pending, caps, sink):
+                        yield action
 
                 title = (event.data or {}).get("title") or "一个操作"
                 options = (event.data or {}).get("options") or ["允许", "拒绝"]
@@ -306,9 +321,8 @@ class Router:
 
         rest = "".join(buf).strip()
         if rest:
-            sink.append(rest)
-            for index, part in enumerate(persona.style(rest, caps)):
-                yield OutboundAction("markdown", part, delay=self._delay(part, index))
+            for action in self._text_actions(rest, caps, sink):
+                yield action
 
     @staticmethod
     def _delay(part: str, index: int) -> float:

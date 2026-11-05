@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from . import character as cards
+from . import stickers
 from .config import ROOT, AgentCfg, Config
 from .domain import InboundEvent
 from .memory import MemoryService
@@ -114,6 +115,10 @@ class SessionService:
             pairs = [f"{k}={str(v)[:60]}" for k, v in list(profile.items())[:8]]
             extras.append("关于对方：" + "，".join(pairs))
         extras.append(f"现在时间：{time.strftime('%Y-%m-%d %H:%M %A')}")
+
+        hint = stickers.prompt_hint()
+        if hint:
+            extras.append(hint)
 
         if scope == "chat":
             # 聊天通道不该漏出机器信息（路径、配置、密钥、正在跑什么）
