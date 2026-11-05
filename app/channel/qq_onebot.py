@@ -106,7 +106,7 @@ class OneBotChannel:
                 self._ws = None
                 self.connected = False
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 120.0)
+            backoff = min(backoff * 2, 20.0)     # 本地 WS，重试便宜，别等太久
 
     async def _hydrate(self, event: InboundEvent) -> InboundEvent:
         """把图片段从 url 落到本地供 agent 直接 read；语音段落盘后转成文字。"""
