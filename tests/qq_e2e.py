@@ -34,6 +34,7 @@ async def main() -> None:
             allowed_users={"12345"},
             media_root=str(media),
             transcriber=lambda path: "今天天气不错",
+            ocr=lambda path: "报错：找不到文件",
         )
 
         events: asyncio.Queue = asyncio.Queue()
@@ -86,6 +87,7 @@ async def main() -> None:
                 "group_id": 555,
                 "user_id": 12345,
                 "message_id": 3,
+                "sender": {"nickname": "路人甲"},
                 "message": [{"type": "text", "data": {"text": "路过"}}],
             }
         )
@@ -111,7 +113,10 @@ async def main() -> None:
         )
         ev = await asyncio.wait_for(events.get(), timeout=3)
         assert not ev.is_private and ev.text == "帮我看下" and ev.conv_id == "g:555", ev
-        print("ok 群 @ 解析")
+        assert ev.raw.get("recent"), ev.raw
+        assert ev.raw["recent"][0]["name"] == "路人甲", ev.raw["recent"]
+        assert "路过" in ev.raw["recent"][0]["text"], ev.raw["recent"]
+        print("ok 群 @ 解析（带被动上下文）")
 
         # 5) 语音：record 段落到本地并转写成文字，语音-only 也要能进会话
         await server.send_event(
@@ -130,6 +135,79 @@ async def main() -> None:
         assert ev.attachments[0]["kind"] == "voice", ev.attachments
         print("ok 语音转写")
 
+        # 5.5) 表情包：动画表情按图片落盘，只有表情也要能生成事件
+        sticker_file = media / "sticker_in.jpg"
+        sticker_file.write_bytes(b"fake-sticker")
+        await server.send_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 12345,
+                "message_id": 55,
+                "message": [
+                    {
+                        "type": "image",
+                        "data": {
+                            "summary": "[动画表情]",
+                            "sub_type": 1,
+                            "file": "sticker_in.jpg",
+                            "path": str(sticker_file),
+                        },
+                    }
+                ],
+            }
+        )
+        ev = await asyncio.wait_for(events.get(), timeout=3)
+        assert ev.text == "[对方发来表情包]", ev.text
+        assert ev.attachments[0]["kind"] == "image" and ev.attachments[0].get("path"), ev.attachments
+        print("ok 收到表情包")
+
+        # QQ 自带小黄脸：id 转名字
+        await server.send_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 12345,
+                "message_id": 56,
+                "message": [{"type": "face", "data": {"id": "14"}}],
+            }
+        )
+        ev = await asyncio.wait_for(events.get(), timeout=3)
+        assert ev.text == "[对方发来QQ表情：微笑]", ev.text
+        print("ok 收到QQ表情")
+
+        # 商城表情（mface）：没有图也要带 summary 进会话
+        await server.send_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 12345,
+                "message_id": 57,
+                "message": [{"type": "mface", "data": {"summary": "[表情包]"}}],
+            }
+        )
+        ev = await asyncio.wait_for(events.get(), timeout=3)
+        assert "对方发来表情包" in ev.text, ev.text
+        print("ok 收到商城表情")
+
+        # 5.6) 普通图片先跑 OCR，识别到的文字随消息进会话
+        shot = media / "shot.jpg"
+        shot.write_bytes(b"fake-shot")
+        await server.send_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": 12345,
+                "message_id": 58,
+                "message": [
+                    {"type": "image", "data": {"file": "shot.jpg", "path": str(shot)}}
+                ],
+            }
+        )
+        ev = await asyncio.wait_for(events.get(), timeout=3)
+        assert "[图片文字]" in ev.text and "报错：找不到文件" in ev.text, ev.text
+        print("ok 图片 OCR 进会话")
+
         # 6) 本地图片转 base64 发送（NapCat 在容器里够不到宿主机路径）
         image = media / "sticker.jpg"
         image.write_bytes(b"fake-image")
@@ -139,6 +217,16 @@ async def main() -> None:
         seg = image_msg["params"]["message"][0]
         assert seg["type"] == "image" and seg["data"]["file"].startswith("base64://"), seg
         print("ok 本地图片转 base64")
+
+        # 6.4) 语音发送：本地 SILK 转 base64 record
+        silk = media / "reply.silk"
+        silk.write_bytes(b"\x02#!SILK_V3fake")
+        await channel.send("u:12345", OutboundAction("voice", media=str(silk)))
+        await asyncio.sleep(0.2)
+        voice_msg = [r for r in server.received if r.get("action") == "send_private_msg"][-1]
+        seg = voice_msg["params"]["message"][0]
+        assert seg["type"] == "record" and seg["data"]["file"].startswith("base64://"), seg
+        print("ok 语音发送结构")
 
         # 6.5) 下载上限：超限直接丢弃，不落盘
         class BigFile(http.server.BaseHTTPRequestHandler):
@@ -206,11 +294,12 @@ async def main() -> None:
 
         # 10) 戳一戳：连回 3 次后进入冷却，冷却结束恢复
         qq_mod.POKE_COOLDOWN_S = 1.0
+        qq_mod.POKE_BACK_RATE = 0.0
 
         def group_rows() -> list[dict]:
             return [r for r in server.received if r.get("action") == "send_group_msg"]
 
-        async def send_poke(t: int) -> None:
+        async def send_poke(t: int, group: int = 555, target: int = 99999) -> None:
             await server.send_event(
                 {
                     "post_type": "notice",
@@ -218,8 +307,8 @@ async def main() -> None:
                     "sub_type": "poke",
                     "time": t,
                     "user_id": 12345,
-                    "target_id": 99999,
-                    "group_id": 555,
+                    "target_id": target,
+                    "group_id": group,
                 }
             )
 
@@ -251,6 +340,20 @@ async def main() -> None:
         rows = await wait_rows(base + 4)
         assert len(rows) == base + 4, "冷却结束应恢复"
         print("ok 戳一戳冷却后恢复")
+
+        # 11) 回戳对方：概率拉满时只发 send_poke，不发文字
+        qq_mod.POKE_BACK_RATE = 1.0
+        await send_poke(1762330006, group=557)
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            back = [r for r in server.received if r.get("action") == "send_poke"
+                    and r["params"].get("group_id") == 557]
+            if back:
+                break
+        assert back and back[-1]["params"] == {"user_id": 12345, "group_id": 557}, back
+        assert not [r for r in server.received if r.get("action") == "send_group_msg"
+                    and r["params"].get("group_id") == 557], "回戳时不该再发文字"
+        print("ok 戳一戳回戳对方")
 
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

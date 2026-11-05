@@ -30,6 +30,22 @@ SEEN_LIMIT = 500
 SEND_TIMEOUT = 20.0
 POKE_LIMIT = 3              # 同一会话连回几次后进入冷却
 POKE_COOLDOWN_S = 5.0       # 到上限后冷却多久
+POKE_BACK_RATE = 0.35       # 回戳对方的概率，其余情况回一句话
+GROUP_CTX_LIMIT = 20        # 每个群保留最近多少条被动上下文
+
+# QQ 自带小黄脸的常用 id -> 名字；不在表里就只标记“QQ表情”
+FACE_NAMES = {
+    "0": "惊讶", "1": "撇嘴", "2": "色", "3": "发呆", "4": "得意",
+    "5": "流泪", "6": "害羞", "7": "闭嘴", "8": "睡", "9": "大哭",
+    "10": "尴尬", "11": "发怒", "12": "调皮", "13": "呲牙", "14": "微笑",
+    "15": "难过", "16": "酷", "17": "冷汗", "18": "抓狂", "19": "吐",
+    "20": "偷笑", "21": "可爱", "22": "白眼", "23": "傲慢", "24": "饥饿",
+    "25": "困", "26": "惊恐", "27": "流汗", "28": "憨笑", "29": "大兵",
+    "30": "奋斗", "31": "咒骂", "32": "疑问", "33": "嘘", "34": "晕",
+    "39": "再见", "41": "抠鼻", "42": "鼓掌", "44": "坏笑", "49": "委屈",
+    "50": "快哭了", "52": "亲亲", "54": "可怜", "63": "玫瑰", "66": "爱心",
+    "67": "心碎", "79": "强", "80": "弱", "81": "握手", "82": "胜利",
+}
 
 _CLOSED = object()     # 读循环结束的哨兵
 
@@ -47,6 +63,7 @@ class OneBotChannel:
         allowed_users: set[str] | None = None,
         media_root: str = "",
         transcriber: Callable[[str], str] | None = None,
+        ocr: Callable[[str], str] | None = None,
     ) -> None:
         self.ws_url = ws_url
         self.access_token = access_token
@@ -55,6 +72,7 @@ class OneBotChannel:
         self.allowed_users = allowed_users or set()
         self.media_root = media_root            # 图片/语音落到这里（通常是 agent 工作目录）
         self.transcriber = transcriber          # 语音转写：同步函数，放线程里跑
+        self.ocr = ocr                          # 图片文字识别：同步函数，放线程里跑
         self._ws = None
         self._inbox: asyncio.Queue | None = None
         self._write_lock = asyncio.Lock()
@@ -66,6 +84,7 @@ class OneBotChannel:
         self._bg: set[asyncio.Task] = set()     # 后台回戳等轻任务
         self._poke_count: dict[str, int] = {}   # 本轮已回戳次数
         self._poke_until: dict[str, float] = {} # 冷却结束时间
+        self._group_ctx: dict[str, list[dict]] = {}   # 群聊被动上下文
 
     # ---------- 连接 ----------
 
@@ -124,13 +143,24 @@ class OneBotChannel:
         folder = day_dir(self.media_root, "inbox")
         items: list[dict] = []
         voice_notes: list[str] = []
+        ocr_notes: list[str] = []
         for raw in event.attachments:
             entry = dict(raw)
             kind = entry.get("kind")
-            if kind == "image" and entry.get("url") and not entry.get("path"):
-                path = await download(str(entry["url"]), folder, ".jpg", MAX_BYTES)
+            if kind == "image":
+                path = entry.get("path")
+                if path and not Path(str(path)).is_file():
+                    path = None     # 容器内路径宿主机看不到
+                if not path and entry.get("url"):
+                    path = await download(str(entry["url"]), folder, ".jpg", MAX_BYTES)
                 if path:
                     entry["path"] = path
+                    # 表情包不跑 OCR；普通图片先认字，识别到就直接塞进会话
+                    if self.ocr is not None and not entry.get("sticker"):
+                        text = await asyncio.to_thread(self.ocr, str(path))
+                        if text:
+                            entry["ocr"] = text
+                            ocr_notes.append(text)
             elif kind == "voice":
                 path = entry.get("path")
                 if path and not Path(str(path)).is_file():
@@ -145,8 +175,9 @@ class OneBotChannel:
             items.append(entry)
 
         text = event.text
-        if voice_notes:
-            note = "\n".join(voice_notes)
+        notes = voice_notes + [f"[图片文字] {t}" for t in ocr_notes]
+        if notes:
+            note = "\n".join(notes)
             text = f"{text}\n{note}" if text else note
         return replace(event, text=text, attachments=items)
 
@@ -234,8 +265,36 @@ class OneBotChannel:
             elif seg_type == "at":
                 if self.self_id and str(data.get("qq")) == self.self_id:
                     at_self = True
+            elif seg_type == "face":
+                name = str(data.get("name") or FACE_NAMES.get(str(data.get("id", "")), ""))
+                text_parts.append(f"[对方发来QQ表情：{name}]" if name else "[对方发来QQ表情]")
+            elif seg_type in ("mface", "marketface"):
+                summary = str(data.get("summary") or "").strip()
+                text_parts.append(f"[对方发来表情包：{summary}]" if summary else "[对方发来表情包]")
+                if data.get("url"):
+                    attachments.append(
+                        {
+                            "kind": "image",
+                            "url": data.get("url"),
+                            "file": data.get("file"),
+                            "sticker": True,
+                            "summary": summary,
+                        }
+                    )
             elif seg_type == "image":
-                attachments.append({"kind": "image", "url": data.get("url"), "file": data.get("file")})
+                sticker = str(data.get("sub_type") or "") == "1" or str(data.get("summary") or "") == "[动画表情]"
+                attachments.append(
+                    {
+                        "kind": "image",
+                        "url": data.get("url"),
+                        "file": data.get("file"),
+                        "path": data.get("path"),
+                        "sticker": sticker,
+                        "summary": data.get("summary"),
+                    }
+                )
+                if sticker:
+                    text_parts.append("[对方发来表情包]")
             elif seg_type == "record":
                 attachments.append(
                     {
@@ -247,13 +306,16 @@ class OneBotChannel:
                 )
 
         text = "".join(text_parts).strip()
+        if not text and attachments:
+            # 只发图/表情、不带字时也给模型一个可回应的落点
+            if any(item.get("sticker") for item in attachments):
+                text = "[对方发来表情包]"
+            elif any(item.get("kind") == "image" for item in attachments):
+                text = "[对方发来图片]"
         if not text and not attachments:
             return None
 
         is_private = msg_type == "private"
-        if not is_private and self.group_requires_at and not at_self:
-            return None
-
         if msg_type == "group":
             conv_id = f"g:{payload.get('group_id')}"
         elif msg_type == "private":
@@ -266,10 +328,26 @@ class OneBotChannel:
             log.debug("重复消息，丢弃：%s", message_id)
             return None
 
+        recent = None
+        if not is_private:
+            # 没被 @ 的群消息也记进缓冲，等下次被叫到时给模型看前文
+            recent = list(self._group_ctx.get(conv_id, []))
+            self._remember_group(conv_id, payload, text)
+            if self.group_requires_at and not at_self:
+                return None
+
         # 空白名单时只服务私聊，群聊一律不理，避免小号在群里被陌生人调用
         if not self.allowed_users and not is_private:
             log.info("白名单为空，忽略群消息：group=%s user=%s", payload.get("group_id"), user_id)
             return None
+
+        raw = {
+            "message_id": message_id,
+            "time": payload.get("time"),
+            "group_id": payload.get("group_id"),
+        }
+        if recent:
+            raw["recent"] = recent
 
         return InboundEvent(
             channel=self.name,
@@ -279,8 +357,18 @@ class OneBotChannel:
             is_private=is_private,
             attachments=attachments,
             reply_to=message_id or None,
-            raw={"message_id": message_id, "time": payload.get("time"), "group_id": payload.get("group_id")},
+            raw=raw,
         )
+
+    def _remember_group(self, conv_id: str, payload: dict, text: str) -> None:
+        if not text:
+            return
+        sender = payload.get("sender") or {}
+        name = str(sender.get("card") or sender.get("nickname") or payload.get("user_id") or "群友")
+        buf = self._group_ctx.setdefault(conv_id, [])
+        buf.append({"name": name[:20], "text": text[:120], "time": payload.get("time")})
+        if len(buf) > GROUP_CTX_LIMIT:
+            del buf[: len(buf) - GROUP_CTX_LIMIT]
 
     def _spawn_notice(self, payload: dict) -> None:
         """notice 放后台处理：读循环要留着收 echo，不能在这里 await 发送。"""
@@ -315,6 +403,15 @@ class OneBotChannel:
         else:
             self._poke_count[conv_id] = count
 
+        # 要么直接戳回去，要么随机回一句话
+        if random.random() < POKE_BACK_RATE:
+            try:
+                if await self.poke(conv_id, user_id):
+                    log.info("戳回去：%s %s", conv_id, user_id)
+                    return
+            except Exception as exc:
+                log.warning("戳回去失败：%s", exc)
+
         try:
             await self.send(
                 conv_id,
@@ -339,7 +436,11 @@ class OneBotChannel:
         if reply_to:
             message.append({"type": "reply", "data": {"id": reply_to}})
 
-        if action.kind in ("image", "file") and action.media:
+        if action.kind == "voice" and action.media:
+            message.append({"type": "record", "data": {"file": self._media_ref(action.media)}})
+            if action.text:
+                message.append({"type": "text", "data": {"text": action.text}})
+        elif action.kind in ("image", "file") and action.media:
             message.append({"type": "image", "data": {"file": self._media_ref(action.media)}})
             if action.text:
                 message.append({"type": "text", "data": {"text": action.text}})

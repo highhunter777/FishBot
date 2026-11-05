@@ -16,6 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+from . import ocr as ocr_mod
 from . import stt
 from .agent.factory import build_agent
 from .alert import notify
@@ -27,10 +28,12 @@ from .credentials import inject_dsh_refs
 from .deps import Deps
 from .domain import Caps
 from .memory import MemoryService
+from .proactive import Proactive
 from .pump import pump_channel
 from .router import Router
 from .session import SessionService
 from .store import Store
+from .tts import Tts
 from .watchdog import Watchdog, restart_container
 
 log = logging.getLogger(__name__)
@@ -65,6 +68,7 @@ def _build_qq(cfg: Config) -> OneBotChannel | None:
         allowed_users=cfg.allowed_users,
         media_root=cfg.agents["worker"].cwd if "worker" in cfg.agents else "",
         transcriber=transcriber,
+        ocr=(lambda path: ocr_mod.image_text(path, cfg)) if cfg.ocr.enabled else None,
     )
 
 
@@ -89,8 +93,14 @@ async def lifespan(app: FastAPI):
     caps: dict[str, Caps] = {"web": WEB_CAPS}
     gate = ApprovalGate()
     router = Router(cfg, store, sessions, agents, caps, gate)
+    proactive = Proactive(store, cfg)
+    router.proactive = proactive
+    router.tts = Tts(cfg) if cfg.tts.enabled else None
 
     tasks: list[asyncio.Task] = []
+    if cfg.memory.enabled and cfg.memory.embedding:
+        tasks.append(asyncio.create_task(sessions.backfill_vectors(), name="memory-index"))
+
     channels: dict[str, object] = {}
     qq = _build_qq(cfg)
     if qq is not None:
@@ -100,6 +110,9 @@ async def lifespan(app: FastAPI):
         log.info("QQ 小号渠道已启动：%s", qq.ws_url)
 
     router.attach_channels(channels)
+    proactive.attach_channels(channels)
+    if channels and cfg.proactive.enabled:
+        tasks.append(asyncio.create_task(proactive.run(), name="proactive"))
 
     if channels and cfg.alerts.enabled:
         def _restart(name: str) -> bool:
