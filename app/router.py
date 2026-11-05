@@ -39,7 +39,11 @@ class Router:
         self.caps_by_channel = caps_by_channel or {}
         self.gate = gate or ApprovalGate()
         self.primary = cfg.default_agent       # 指令作用于这个后端的记忆
+        self.channels: dict[str, object] = {}  # 渠道实例，供 /recall /poke 用
         self._last_call: dict[tuple[str, str], float] = {}
+
+    def attach_channels(self, channels: dict[str, object]) -> None:
+        self.channels = channels
 
     def caps(self, channel: str) -> Caps:
         return self.caps_by_channel.get(channel, DEFAULT_CAPS)
@@ -131,6 +135,21 @@ class Router:
                     body = "，".join(f"{k}={v}" for k, v in items.items())
                     rows.append(f"[{scope}] {body}")
             yield OutboundAction("text", "\n".join(rows) if rows else words["empty_profile"], delay=0.2)
+            return
+
+        if cmd in ("/recall", "/撤回"):
+            channel = self.channels.get(ev.channel)
+            fn = getattr(channel, "recall", None)
+            ok = bool(await fn(ev.conv_id)) if fn is not None else False
+            yield OutboundAction("text", words["recalled"] if ok else words["recall_fail"], delay=0.2)
+            return
+
+        if cmd in ("/poke", "/戳"):
+            channel = self.channels.get(ev.channel)
+            fn = getattr(channel, "poke", None)
+            target = rest or ev.user_id
+            ok = bool(await fn(ev.conv_id, target)) if fn is not None else False
+            yield OutboundAction("text", words["poked"] if ok else words["poke_fail"], delay=0.2)
             return
 
         if cmd in ("/chat", "/闲聊"):

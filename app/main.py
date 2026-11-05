@@ -89,6 +89,8 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(pump_channel(qq, router), name=qq.name))
         log.info("QQ 小号渠道已启动：%s", qq.ws_url)
 
+    router.attach_channels(channels)
+
     if channels and cfg.alerts.enabled:
         watchdog = Watchdog(
             channels,

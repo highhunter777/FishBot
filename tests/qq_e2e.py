@@ -116,6 +116,32 @@ async def main() -> None:
         assert any(r.get("action") == "send_group_msg" for r in server.received)
         print("ok 群发送")
 
+        # 7) 引用 + @ 提问者
+        await channel.send(
+            "g:555",
+            OutboundAction("text", "带引用", at_user="12345"),
+            reply_to="4",
+        )
+        await asyncio.sleep(0.2)
+        group_msg = [r for r in server.received if r.get("action") == "send_group_msg"][-1]
+        segs = group_msg["params"]["message"]
+        assert segs[0] == {"type": "at", "data": {"qq": "12345"}}, segs
+        assert segs[1] == {"type": "reply", "data": {"id": "4"}}, segs
+        assert segs[2]["type"] == "text", segs
+        print("ok 群消息带 @ 与引用")
+
+        # 8) 撤回
+        assert await channel.recall("g:555"), "撤回失败"
+        await asyncio.sleep(0.2)
+        assert any(r.get("action") == "delete_msg" for r in server.received)
+        print("ok 撤回")
+
+        # 9) 戳一戳
+        assert await channel.poke("g:555", "12345")
+        poke = [r for r in server.received if r.get("action") == "send_poke"][-1]
+        assert poke["params"] == {"user_id": 12345, "group_id": 555}, poke
+        print("ok 戳一戳")
+
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 

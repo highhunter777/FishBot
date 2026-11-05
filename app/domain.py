@@ -49,6 +49,7 @@ class OutboundAction:
     media: str | None = None
     options: list[str] | None = None
     delay: float = 0.0    # 发送前的人为停顿（秒），由节奏层给出
+    at_user: str = ""     # 群里回复时 @ 谁（渠道决定要不要用）
 
 
 @dataclass(frozen=True, slots=True)

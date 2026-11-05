@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 
 from .channel.base import PushChannel
 from .router import Router
@@ -20,6 +21,9 @@ async def pump_channel(channel: PushChannel, router: Router, concurrency: int = 
                 async for action in router.stream(ev):
                     if action.delay:
                         await asyncio.sleep(action.delay)
+                    # 群里回复时带上 @，不然对方不知道在跟谁说话
+                    if not ev.is_private and not action.at_user:
+                        action = replace(action, at_user=ev.user_id)
                     await channel.send(ev.conv_id, action, ev.reply_to)
             except Exception:
                 log.exception("处理消息失败：%s %s", ev.channel, ev.conv_id)

@@ -35,6 +35,8 @@ OWNER_LINES = {
         "主人想让我做什么呀喵？\n\n"
         "想聊天——直接说就好\n"
         "想让我动手——/do 后面接要做的事\n"
+        "说错话了——/recall 撤回\n"
+        "想戳一下——/poke\n"
         "嫌我记太多——/new 清一清\n"
         "想让我记着——/remember 键=值\n"
         "看我记了啥——/profile"
@@ -51,6 +53,10 @@ OWNER_LINES = {
     "no_agent": "这个我暂时没接上喵。",
     "empty_profile": "还没记什么呢喵。",
     "cleared": "清了喵。",
+    "recalled": "收回来了喵。",
+    "recall_fail": "没找到能撤回的消息喵。",
+    "poked": "戳到了喵。",
+    "poke_fail": "戳不动…可能对方不接受喵。",
 }
 
 GUEST_LINES = {
@@ -73,6 +79,10 @@ GUEST_LINES = {
     "no_agent": "这个我暂时没接上喵。",
     "empty_profile": "还没记什么呢喵。",
     "cleared": "清了喵。",
+    "recalled": "收回去了喵。",
+    "recall_fail": "没找到能撤回的消息喵。",
+    "poked": "戳到了喵。",
+    "poke_fail": "戳不动喵。",
 }
 
 

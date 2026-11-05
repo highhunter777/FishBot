@@ -45,6 +45,7 @@ class OneBotChannel:
         self._ws = None
         self._inbox: asyncio.Queue | None = None
         self._write_lock = asyncio.Lock()
+        self._last_sent: dict[str, str] = {}   # conv_id -> 最近一条自己发的 message_id
         self.connected = False          # 巡检用：WS 是否处于已连接状态
         self._fails = 0                 # 连续重连失败次数
         self._pending: dict[str, asyncio.Future] = {}
@@ -213,20 +214,53 @@ class OneBotChannel:
             log.warning("非法 conv_id：%s", conv_id)
             return
 
+        # 群里先 @ 人，再引用，最后才是正文
+        message: list[dict] = []
+        if kind == "g" and action.at_user:
+            message.append({"type": "at", "data": {"qq": action.at_user}})
+        if reply_to:
+            message.append({"type": "reply", "data": {"id": reply_to}})
+
         if action.kind in ("image", "file") and action.media:
-            message = [
-                {"type": "image", "data": {"file": action.media}},
-                *([{"type": "text", "data": {"text": action.text}}] if action.text else []),
-            ]
-        else:
-            if not action.text:
-                return
-            message = [{"type": "text", "data": {"text": action.text}}]
+            message.append({"type": "image", "data": {"file": action.media}})
+            if action.text:
+                message.append({"type": "text", "data": {"text": action.text}})
+        elif action.text:
+            message.append({"type": "text", "data": {"text": action.text}})
+
+        if all(seg["type"] in ("at", "reply") for seg in message):
+            return          # 只有 @ 和引用、没有正文，不发
 
         if kind == "g":
-            await self._call("send_group_msg", {"group_id": int(target), "message": message})
+            resp = await self._call("send_group_msg", {"group_id": int(target), "message": message})
         else:
-            await self._call("send_private_msg", {"user_id": int(target), "message": message})
+            resp = await self._call("send_private_msg", {"user_id": int(target), "message": message})
+
+        message_id = (resp.get("data") or {}).get("message_id")
+        if message_id:
+            self._last_sent[conv_id] = str(message_id)
+
+    async def recall(self, conv_id: str) -> bool:
+        """撤回这个会话里最后一条自己发的消息。"""
+        message_id = self._last_sent.get(conv_id)
+        if not message_id:
+            return False
+        resp = await self._call("delete_msg", {"message_id": message_id})
+        if resp.get("retcode") in (0, None):
+            self._last_sent.pop(conv_id, None)
+            return True
+        return False
+
+    async def poke(self, conv_id: str, user_id: str) -> bool:
+        """戳一戳。"""
+        kind, _, target = conv_id.partition(":")
+        if not target or not user_id:
+            return False
+        params = {"user_id": int(user_id)}
+        if kind == "g":
+            params["group_id"] = int(target)
+        resp = await self._call("send_poke", params)
+        return resp.get("retcode") in (0, None)
 
     async def _call(self, action: str, params: dict) -> dict:
         ws = self._ws
