@@ -55,6 +55,7 @@ def _build_qq(cfg: Config) -> OneBotChannel | None:
         self_id=str(qq["self_id"]) if qq.get("self_id") else None,
         group_requires_at=bool(qq.get("group_requires_at", True)),
         allowed_users=cfg.allowed_users,
+        media_root=cfg.agents["worker"].cwd if "worker" in cfg.agents else "",
     )
 
 

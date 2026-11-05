@@ -11,11 +11,13 @@ import logging
 import time
 import uuid
 from collections import OrderedDict
+from dataclasses import replace
 from typing import AsyncIterator
 
 import websockets
 
 from ..domain import Caps, InboundEvent, OutboundAction
+from ..files import day_dir, download
 
 log = logging.getLogger(__name__)
 
@@ -36,12 +38,14 @@ class OneBotChannel:
         self_id: str | None = None,
         group_requires_at: bool = True,
         allowed_users: set[str] | None = None,
+        media_root: str = "",
     ) -> None:
         self.ws_url = ws_url
         self.access_token = access_token
         self.self_id = str(self_id) if self_id else None
         self.group_requires_at = group_requires_at
         self.allowed_users = allowed_users or set()
+        self.media_root = media_root            # 图片/文件落到这里（通常是 agent 工作目录）
         self._ws = None
         self._inbox: asyncio.Queue | None = None
         self._write_lock = asyncio.Lock()
@@ -97,6 +101,19 @@ class OneBotChannel:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 120.0)
 
+    async def _hydrate(self, event: InboundEvent) -> InboundEvent:
+        """把图片段从 url 落到本地，供 agent 直接 read。"""
+        folder = day_dir(self.media_root, "inbox")
+        items: list[dict] = []
+        for raw in event.attachments:
+            entry = dict(raw)
+            if entry.get("kind") == "image" and entry.get("url") and not entry.get("path"):
+                path = await download(str(entry["url"]), folder, ".jpg")
+                if path:
+                    entry["path"] = path
+            items.append(entry)
+        return replace(event, attachments=items)
+
     async def _reader(self, ws) -> None:
         try:
             async for raw in ws:
@@ -110,8 +127,11 @@ class OneBotChannel:
                 if payload.get("post_type") != "message":
                     continue
                 event = self._to_event(payload)
-                if event is not None and self._inbox is not None:
-                    self._inbox.put_nowait(event)
+                if event is None or self._inbox is None:
+                    continue
+                if event.attachments and self.media_root:
+                    event = await self._hydrate(event)      # 下载图片到工作目录
+                self._inbox.put_nowait(event)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

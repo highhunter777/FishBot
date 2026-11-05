@@ -177,6 +177,18 @@ class AcpAdapter:
             if guard:
                 payload = f"<context>\n{guard}\n</context>\n\n{text}"
 
+        if attachments:
+            paths = [
+                str(item["path"])
+                for item in attachments
+                if item.get("kind") == "image" and item.get("path")
+            ]
+            if paths:
+                payload = (
+                    "（用户发来了图片，已经存在本地：" + "、".join(paths)
+                    + "。需要时用 read 工具打开看一眼）\n\n" + payload
+                )
+
         self._queue = asyncio.Queue()
         task = asyncio.create_task(self._run_prompt(session_id, payload))
         try:

@@ -227,7 +227,9 @@ class Router:
             # 用队列转发：直接对 async generator 做 wait_for 超时会被取消弄坏，
             # 表现是首字慢一点之后就再也没有输出。
             queue: asyncio.Queue = asyncio.Queue()
-            pump = asyncio.create_task(self._pump(agent, session_id, text, messages, queue))
+            pump = asyncio.create_task(
+                self._pump(agent, session_id, text, messages, queue, ev.attachments)
+            )
             try:
                 try:
                     first = await asyncio.wait_for(queue.get(), timeout=FIRST_EVENT_TIMEOUT)
@@ -321,9 +323,18 @@ class Router:
             yield event
 
     @staticmethod
-    async def _pump(agent: AgentPort, session_id: str, text: str, messages, queue: asyncio.Queue) -> None:
+    async def _pump(
+        agent: AgentPort,
+        session_id: str,
+        text: str,
+        messages,
+        queue: asyncio.Queue,
+        attachments: list | None = None,
+    ) -> None:
         try:
-            async for event in agent.prompt(session_id, text, messages=messages):
+            async for event in agent.prompt(
+                session_id, text, messages=messages, attachments=attachments
+            ):
                 await queue.put(event)
         except asyncio.CancelledError:
             raise

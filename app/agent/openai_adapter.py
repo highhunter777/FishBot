@@ -7,6 +7,7 @@ import httpx
 
 from ..config import AgentCfg
 from ..domain import AgentCaps, AgentEvent
+from ..files import data_url
 from .port import AgentError
 
 
@@ -37,6 +38,33 @@ class OpenAiAdapter:
         last["content"] = f"【角色与要求】\n{head}\n\n【我的消息】\n{last.get('content', '')}"
         return rest[:-1] + [last]
 
+    @staticmethod
+    def _image_paths(attachments: list | None) -> list[str]:
+        return [
+            str(item["path"])
+            for item in (attachments or [])
+            if item.get("kind") == "image" and item.get("path")
+        ]
+
+    @staticmethod
+    def _attach_images(messages: list[dict], paths: list[str]) -> list[dict]:
+        """把本地图片转成 base64 塞进最后一条用户消息（OpenAI vision 格式）。"""
+        blocks: list[dict] = []
+        for path in paths:
+            url = data_url(path)
+            if url:
+                blocks.append({"type": "image_url", "image_url": {"url": url}})
+        if not blocks:
+            return messages
+
+        out = list(messages)
+        last = dict(out[-1])
+        content = last.get("content") or ""
+        if isinstance(content, str):
+            last["content"] = [{"type": "text", "text": content or "看看这张图"}, *blocks]
+            out[-1] = last
+        return out
+
     def _endpoint(self) -> str:
         base = self.cfg.base_url.rstrip("/")
         if base.endswith("/chat/completions"):
@@ -62,6 +90,9 @@ class OpenAiAdapter:
         payload_messages = messages or [{"role": "user", "content": text}]
         if self.cfg.system_in_user:
             payload_messages = self._merge_system(payload_messages)
+        images = self._image_paths(attachments)
+        if images:
+            payload_messages = self._attach_images(payload_messages, images)
         body = {
             "model": self.cfg.model,
             "messages": payload_messages,
