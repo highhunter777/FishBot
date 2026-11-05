@@ -24,7 +24,8 @@ async def pump_channel(channel: PushChannel, router: Router, concurrency: int = 
                     # 群里回复时带上 @，不然对方不知道在跟谁说话
                     if not ev.is_private and not action.at_user:
                         action = replace(action, at_user=ev.user_id)
-                    await channel.send(ev.conv_id, action, ev.reply_to)
+                    # 聊天不引用原消息：每条都带引用条太吵
+                    await channel.send(ev.conv_id, action)
             except Exception:
                 log.exception("处理消息失败：%s %s", ev.channel, ev.conv_id)
 
