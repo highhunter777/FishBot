@@ -190,9 +190,9 @@ def split_like_human(text: str, max_len: int = 1500, soft_len: int = 300) -> lis
     return blocks or [text[:max_len]]
 
 
-def style(text: str, caps: Caps) -> list[str]:
+def style(text: str, caps: Caps, clean_ai: bool = True) -> list[str]:
     """清洗 + 切分 + 给出每段的人为延迟。"""
-    cleaned = de_ai(text)
+    cleaned = de_ai(text) if clean_ai else (text or "").strip()
     parts = split_like_human(cleaned, max_len=caps.max_len)
     return parts
 

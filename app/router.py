@@ -495,7 +495,9 @@ class Router:
         actions: list[OutboundAction] = []
         if clean:
             sink.append(clean)
-            for index, part in enumerate(persona.style(clean, caps)):
+            for index, part in enumerate(
+                persona.style(clean, caps, clean_ai=self.cfg.persona.de_ai)
+            ):
                 actions.append(OutboundAction("markdown", part, delay=self._delay(part, index)))
         for name in hits:
             path = stickers.resolve(name)

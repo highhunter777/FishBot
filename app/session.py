@@ -34,7 +34,7 @@ FEEDBACK_HINTS = (
 )
 
 CHAT_PROMPTS = {
-    "private": "你是我自己的助手，说话像熟人，简短直接，不用客套话，不用列表。",
+    "private": "你是我自己的助手，说话像熟人，自然表达，按内容自己选格式。",
     "group": "你在群聊里，只在被叫到时说话，简短、有分寸，不抢戏，不刷屏。",
     "public": "你在公开渠道，回答极简、克制，不辩论，不表态。",
 }
@@ -131,6 +131,10 @@ class SessionService:
                     "用户纠正过你，后续务必遵守：\n" + "\n".join(f"- {r}" for r in rules[:5])
                 )
         extras.append(f"现在时间：{time.strftime('%Y-%m-%d %H:%M %A')}")
+        extras.append(
+            "表情：闲聊时可以自然地带 1 个 Unicode emoji（如 😊 🐟 🥺），也可以不用；"
+            "看语气自己决定，别每句都堆。汇报、报错、给步骤时不用。"
+        )
 
         recent = ev.raw.get("recent") if isinstance(ev.raw, dict) else None
         if recent and not ev.is_private:

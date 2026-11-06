@@ -123,6 +123,11 @@ class EntertainmentCfg:
 
 
 @dataclass(slots=True)
+class PersonaCfg:
+    de_ai: bool = True       # 是否启用机械去 AI 腔/去列表前缀
+
+
+@dataclass(slots=True)
 class PlanningCfg:
     enabled: bool = True
     max_steps: int = 5
@@ -179,6 +184,7 @@ class Config:
     ocr: OcrCfg = field(default_factory=OcrCfg)
     media: MediaCfg = field(default_factory=MediaCfg)
     entertainment: EntertainmentCfg = field(default_factory=EntertainmentCfg)
+    persona: PersonaCfg = field(default_factory=PersonaCfg)
     planning: PlanningCfg = field(default_factory=PlanningCfg)
     proactive: ProactiveCfg = field(default_factory=ProactiveCfg)
 
@@ -239,6 +245,7 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
     ocr = OcrCfg(**dict(raw.get("ocr") or {}))
     media = MediaCfg(**dict(raw.get("media") or {}))
     entertainment = EntertainmentCfg(**dict(raw.get("entertainment") or {}))
+    persona = PersonaCfg(**dict(raw.get("persona") or {}))
     planning = PlanningCfg(**dict(raw.get("planning") or {}))
     proactive = ProactiveCfg(**dict(raw.get("proactive") or {}))
 
@@ -259,6 +266,7 @@ def load_config(path: str | pathlib.Path | None = None) -> Config:
         ocr=ocr,
         media=media,
         entertainment=entertainment,
+        persona=persona,
         planning=planning,
         proactive=proactive,
     )

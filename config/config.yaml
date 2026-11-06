@@ -203,6 +203,10 @@ alerts:
   napcat_container: napcat
   restart_cooldown_s: 600       # 两次自动重启的最小间隔
 
+# 回复风格：de_ai=false 时不再机械删除“首先/其次/列表前缀”，交给模型自己组织
+persona:
+  de_ai: false
+
 limits:
   "*":        { interval_s: 1.0, max_len: 1500 }
   web:        { interval_s: 0.0, max_len: 8000 }
