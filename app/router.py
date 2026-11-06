@@ -529,7 +529,9 @@ class Router:
                     buf.append(event.text)
 
             elif event.kind == "progress":
-                yield OutboundAction("text", event.text, delay=0.2)
+                # 推送渠道静默：工具失败/思考中的碎碎念不发 QQ，避免刷屏和风控
+                if ev.channel in ("web", "cli"):
+                    yield OutboundAction("text", event.text, delay=0.2)
 
             elif event.kind == "tool_call":
                 # QQ 等推送渠道静默：频繁的“在弄 xx”既刷屏又容易触发风控
