@@ -17,7 +17,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from . import ocr as ocr_mod
-from . import stt, vision
+from . import stt, vision, napcat
 from .agent.factory import build_agent
 from .alert import notify
 from .approval import ApprovalGate
@@ -139,6 +139,10 @@ async def lifespan(app: FastAPI):
             notifier=notify,
             restarter=_restart if cfg.alerts.restart_napcat else None,
             restart_cooldown_s=cfg.alerts.restart_cooldown_s,
+            login_check=(
+                lambda: napcat.login_required(cfg.alerts.napcat_container)
+            ) if cfg.alerts.restart_napcat else None,
+            login_hint=lambda: napcat.login_message(cfg.alerts.napcat_container),
         )
         tasks.append(asyncio.create_task(watchdog.run(), name="watchdog"))
 

@@ -40,6 +40,8 @@ class Watchdog:
         notifier: Notifier | None = None,
         restarter: Restarter | None = None,
         restart_cooldown_s: float = 600.0,
+        login_check: Callable[[], bool] | None = None,
+        login_hint: Callable[[], str] | None = None,
     ) -> None:
         self.channels = channels
         self.interval = interval_s
@@ -47,9 +49,12 @@ class Watchdog:
         self.notifier = notifier or (lambda title, message: bool(log.warning("%s - %s", title, message)))
         self.restarter = restarter
         self.cooldown = restart_cooldown_s
+        self.login_check = login_check
+        self.login_hint = login_hint or (lambda: "请打开 NapCat WebUI 完成验证码/扫码登录。")
         self._fails: dict[str, int] = {name: 0 for name in channels}
         self._alerted: dict[str, bool] = {name: False for name in channels}
         self._restarted: dict[str, bool] = {name: False for name in channels}
+        self._login_blocked: dict[str, bool] = {name: False for name in channels}
         self._last_restart: dict[str, float] = {}
 
     def _healthy(self, channel: object) -> bool:
@@ -57,7 +62,7 @@ class Watchdog:
         return True if flag is None else bool(flag)
 
     def _can_restart(self, name: str) -> bool:
-        if self.restarter is None or self._restarted.get(name):
+        if self.restarter is None or self._restarted.get(name) or self._login_blocked.get(name):
             return False
         last = self._last_restart.get(name, 0.0)
         return time.monotonic() - last >= self.cooldown
@@ -79,6 +84,7 @@ class Watchdog:
                     self.notifier("FishBot", f"{name} 已恢复连接")
                     self._alerted[name] = False
                     self._restarted[name] = False
+                self._login_blocked[name] = False
                 self._fails[name] = 0
                 continue
 
@@ -86,6 +92,17 @@ class Watchdog:
             minutes = int(self._fails[name] * self.interval // 60)
 
             if self._fails[name] >= self.threshold and self._can_restart(name):
+                if self.login_check is not None and self.login_check():
+                    self._login_blocked[name] = True
+                    if not self._alerted.get(name):
+                        message = (
+                            f"{name} 已断开约 {minutes} 分钟，NapCat 正在等待验证码/扫码，"
+                            f"已暂停自动重启。{self.login_hint()}"
+                        )
+                        self.notifier("FishBot 需要人工验证", message)
+                        self._alerted[name] = True
+                        alerts.append(message)
+                    continue
                 ok = bool(self.restarter(name))
                 self._restarted[name] = True
                 self._last_restart[name] = time.monotonic()

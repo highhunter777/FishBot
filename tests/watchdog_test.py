@@ -97,6 +97,39 @@ def main() -> None:
     dog3.check_once()
     check("恢复后通知", any("恢复" in s for s in sent), str(sent))
 
+    # 需要验证码：停止自动重启，并把 WebUI 地址放进通知
+    calls.clear()
+    sent.clear()
+    channel = FakeChannel(connected=False)
+    dog4 = Watchdog(
+        {"qq_onebot": channel},
+        interval_s=120,
+        threshold=2,
+        notifier=notifier,
+        restarter=restarter,
+        login_check=lambda: True,
+        login_hint=lambda: "http://127.0.0.1:6099/webui?token=test",
+    )
+    dog4.check_once()
+    dog4.check_once()
+    check("验证码状态不自动重启", calls == [], str(calls))
+    check("通知带 WebUI 地址", any("webui" in s for s in sent), str(sent))
+    dog4.check_once()
+    dog4.check_once()
+    check("验证码状态不重复告警", len(sent) == 1, str(sent))
+
+    # 人工验证状态一旦命中，即使日志窗口过期也不自动重启；恢复后才解锁
+    dog4.login_check = lambda: False
+    dog4.check_once()
+    dog4.check_once()
+    check("验证码拦截后不再自动重启", calls == [], str(calls))
+    channel.connected = True
+    dog4.check_once()
+    channel.connected = False
+    dog4.check_once()
+    dog4.check_once()
+    check("恢复后允许下一轮重启", calls == ["qq_onebot"], str(calls))
+
     print(f"\n全部通过：{PASS} 项")
 
 

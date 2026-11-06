@@ -147,6 +147,7 @@ python tests/acp_probe.py <命令...>          # 探测任意 ACP agent
 进程内巡检与它互补：
 
 - QQ WS 连续 3 次不健康（约 6 分钟）→ 自动重启 NapCat 容器；同一轮掉线只重启一次，10 分钟后才允许下一次
+- 如果最近日志显示 NapCat 正在等待**验证码/扫码**，不自动重启，只发一次带 WebUI 链接的人工验证通知
 - 自动重启后仍连不上 → 弹窗提示人工扫码/过 WebUI 验证
 - 频道重连退避上限 20 秒，NapCat 恢复后很快接上
 
@@ -253,6 +254,7 @@ python tests/router_acp.py   # /do -> 工具调用 -> 审批 -> 继续
 python tests/media_cleanup_test.py  # inbox 过期文件清理
 python tests/doutu_test.py   # 梗库检索、斗图开关、频率上限
 python tests/task_step_test.py  # 任务步骤状态/重试/中断留档
+python tests/watchdog_test.py  # 掉线巡检、重启与验证码拦截
 python tests/eval/run.py     # 39 条真实评测：聊天/任务/记忆/主动/玩法/媒体
 ```
 
